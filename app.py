@@ -1,129 +1,154 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from itertools import product
-import talib
 from io import BytesIO
+import ta
 
-st.title("MACD Parameter Optimizer")
+# -----------------------------
+# Utility function for downloads
+# -----------------------------
+def download_results(df):
+    # --- CSV ---
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download Top 10 Results (CSV)",
+        data=csv,
+        file_name="top10_macd_results.csv",
+        mime="text/csv",
+    )
 
-# ------------------------------
-# 1) Upload Data
-# ------------------------------
-uploaded_file = st.file_uploader("Upload CSV with at least 1500 rows of OHLC data", type=["csv"])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    if "Close" not in df.columns:
-        st.error("CSV must contain a 'Close' column.")
+    # --- Excel ---
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Top10 Results")
+    st.download_button(
+        label="📊 Download Top 10 Results (Excel)",
+        data=output.getvalue(),
+        file_name="top10_macd_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# -----------------------------
+# Streamlit App UI
+# -----------------------------
+st.title("📈 MACD Parameter Optimizer")
+
+st.markdown("""
+Upload historical price data (1500+ days recommended)  
+and test MACD parameter combinations to find the most accurate ones
+based on your target conditions.
+""")
+
+# File upload
+uploaded_file = st.file_uploader("Upload CSV or Excel file (must include 'Date' and 'Close')", type=["csv", "xls", "xlsx"])
+
+if uploaded_file is not None:
+    file_ext = uploaded_file.name.split(".")[-1].lower()
+
+    if file_ext == "csv":
+        data = pd.read_csv(uploaded_file)
+    elif file_ext in ["xls", "xlsx"]:
+        data = pd.read_excel(uploaded_file, engine="openpyxl")
+    else:
+        st.error("Unsupported file format")
         st.stop()
 
-    st.success(f"File uploaded successfully! {len(df)} rows loaded.")
+    # Ensure proper columns
+    if not set(["Date", "Close"]).issubset(data.columns):
+        st.error("File must contain 'Date' and 'Close' columns.")
+        st.stop()
 
-    # ------------------------------
-    # 2) Input ranges
-    # ------------------------------
-    st.subheader("Set MACD Parameter Ranges")
+    data["Date"] = pd.to_datetime(data["Date"])
+    data = data.sort_values("Date").reset_index(drop=True)
 
-    fast_min = st.number_input("Fast EMA (min)", 1, 50, 5)
-    fast_max = st.number_input("Fast EMA (max)", 1, 50, 12)
+    st.write("### Data Preview", data.head())
 
-    slow_min = st.number_input("Slow EMA (min)", 5, 100, 20)
-    slow_max = st.number_input("Slow EMA (max)", 5, 100, 26)
+    # -----------------------------
+    # User Inputs
+    # -----------------------------
+    st.sidebar.header("MACD Parameter Ranges")
 
-    signal_min = st.number_input("Signal EMA (min)", 1, 30, 5)
-    signal_max = st.number_input("Signal EMA (max)", 1, 30, 9)
+    fast_min = st.sidebar.number_input("Fast EMA Min", 2, 50, 12)
+    fast_max = st.sidebar.number_input("Fast EMA Max", 2, 50, 20)
 
-    # ------------------------------
-    # 3–6) Trading Constraints
-    # ------------------------------
-    target_pct = st.number_input("Target % from entry", 0.1, 100.0, 5.0)
-    max_days = st.number_input("Max days to hit target", 1, 100, 10)
-    min_trades = st.number_input("Min number of trades required", 1, 100, 5)
-    min_accuracy = st.number_input("Min accuracy %", 1.0, 100.0, 50.0)
+    slow_min = st.sidebar.number_input("Slow EMA Min", 10, 100, 26)
+    slow_max = st.sidebar.number_input("Slow EMA Max", 10, 100, 40)
 
-    if st.button("Run Optimization"):
-        # ------------------------------
-        # Generate valid combinations
-        # ------------------------------
-        fast_range = range(fast_min, fast_max + 1)
-        slow_range = range(slow_min, slow_max + 1)
-        signal_range = range(signal_min, signal_max + 1)
+    signal_min = st.sidebar.number_input("Signal EMA Min", 2, 30, 9)
+    signal_max = st.sidebar.number_input("Signal EMA Max", 2, 30, 15)
 
-        param_combos = [(f, s, sig) for f in fast_range
-                        for s in slow_range
-                        for sig in signal_range
-                        if f < s]
+    target_pct = st.sidebar.number_input("Target % (from entry)", 1.0, 100.0, 5.0)
+    max_days = st.sidebar.number_input("Max Trading Days to Hit Target", 1, 100, 10)
+    min_trades = st.sidebar.number_input("Minimum Trades Required", 1, 100, 5)
+    min_accuracy = st.sidebar.number_input("Minimum Accuracy %", 1, 100, 40)
 
-        total_combos = len(param_combos)
-
-        st.write(f"Total valid combinations: **{total_combos}**")
-
-        if total_combos > 20000:
-            st.error("Too many combinations! Please narrow ranges. Limit = 20,000.")
-            st.stop()
-
+    # -----------------------------
+    # Run Optimization
+    # -----------------------------
+    if st.button("🚀 Run Optimization"):
         results = []
 
-        close = df["Close"].values
+        for fast in range(fast_min, fast_max + 1):
+            for slow in range(slow_min, slow_max + 1):
+                if fast >= slow:  # restriction
+                    continue
+                for signal in range(signal_min, signal_max + 1):
+                    df = data.copy()
+                    
+                    # Compute MACD
+                    macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - ta.trend.ema_indicator(df["Close"], window=slow)
+                    signal_line = macd_line.ewm(span=signal).mean()
 
-        # ------------------------------
-        # Backtesting function
-        # ------------------------------
-        for fast, slow, sig in param_combos:
-            macd, macd_signal, macd_hist = talib.MACD(
-                close,
-                fastperiod=fast,
-                slowperiod=slow,
-                signalperiod=sig
-            )
+                    df["MACD"] = macd_line
+                    df["Signal"] = signal_line
 
-            # Signal when MACD crosses above Signal line
-            entries = (macd.shift(1) < macd_signal.shift(1)) & (macd > macd_signal)
-            entry_indices = np.where(entries)[0]
+                    # Entry condition: crossover
+                    df["Crossover"] = (df["MACD"].shift(1) < df["Signal"].shift(1)) & (df["MACD"] > df["Signal"])
 
-            wins, total = 0, 0
+                    entries = df[df["Crossover"]].index
+                    total_trades = len(entries)
 
-            for entry_idx in entry_indices:
-                entry_price = close[entry_idx]
-                target_price = entry_price * (1 + target_pct / 100)
+                    if total_trades < min_trades:
+                        continue
 
-                for j in range(entry_idx + 1, min(entry_idx + max_days + 1, len(close))):
-                    if close[j] >= target_price:
-                        wins += 1
-                        break
-                total += 1
+                    hits = 0
+                    for entry in entries:
+                        entry_price = df.loc[entry, "Close"]
+                        target_price = entry_price * (1 + target_pct / 100)
 
-            if total >= min_trades:
-                accuracy = (wins / total) * 100
-                if accuracy >= min_accuracy:
-                    results.append({
-                        "Fast": fast,
-                        "Slow": slow,
-                        "Signal": sig,
-                        "Trades": total,
-                        "Wins": wins,
-                        "Accuracy %": round(accuracy, 2)
-                    })
+                        # Look ahead for max_days
+                        subset = df.loc[entry+1 : entry+max_days]
+                        if (subset["Close"] >= target_price).any():
+                            hits += 1
 
-        # ------------------------------
-        # Show results
-        # ------------------------------
+                    accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
+
+                    if accuracy >= min_accuracy:
+                        results.append({
+                            "FastEMA": fast,
+                            "SlowEMA": slow,
+                            "SignalEMA": signal,
+                            "Trades": total_trades,
+                            "Hits": hits,
+                            "Accuracy%": round(accuracy, 2)
+                        })
+
+        # -----------------------------
+        # Show Results
+        # -----------------------------
         if results:
-            results_df = pd.DataFrame(results).sort_values("Accuracy %", ascending=False)
-            st.dataframe(results_df.head(10))
+            results_df = pd.DataFrame(results)
+            results_df = results_df.sort_values("Accuracy%", ascending=False).reset_index(drop=True)
 
-            # ------------------------------
-            # Download Top 10 to Excel
-            # ------------------------------
+            st.success(f"✅ Found {len(results_df)} valid combinations")
+            st.write("### Top 10 Results")
             top10 = results_df.head(10)
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                top10.to_excel(writer, index=False, sheet_name="Top 10")
-            st.download_button(
-                label="📥 Download Top 10 Results (Excel)",
-                data=output.getvalue(),
-                file_name="macd_top10.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.dataframe(top10)
+
+            # Download Buttons
+            download_results(top10)
+
         else:
-            st.warning("No MACD settings met your trade/accuracy requirements.")
+            st.warning("No parameter combinations matched your criteria.")
+
