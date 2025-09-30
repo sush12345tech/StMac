@@ -65,23 +65,35 @@ if uploaded_file is not None:
     st.write("### Data Preview", data.head())
 
     # -----------------------------
-    # User Inputs
+    # User Inputs with descriptions
     # -----------------------------
     st.sidebar.header("MACD Parameter Ranges")
 
-    fast_min = st.sidebar.number_input("Fast EMA Min", 2, 50, 12)
-    fast_max = st.sidebar.number_input("Fast EMA Max", 2, 50, 20)
+    st.sidebar.markdown("**Fast EMA:** Short-term EMA period for MACD calculation. Typically between 2 to 50.")
+    fast_min = st.sidebar.number_input("Fast EMA Min", 2, 50, 12, help="Minimum period for the fast EMA")
+    fast_max = st.sidebar.number_input("Fast EMA Max", 2, 50, 20, help="Maximum period for the fast EMA")
 
-    slow_min = st.sidebar.number_input("Slow EMA Min", 10, 100, 26)
-    slow_max = st.sidebar.number_input("Slow EMA Max", 10, 100, 40)
+    st.sidebar.markdown("**Slow EMA:** Long-term EMA period for MACD calculation. Must be greater than Fast EMA, typically 10 to 100.")
+    slow_min = st.sidebar.number_input("Slow EMA Min", 10, 100, 26, help="Minimum period for the slow EMA")
+    slow_max = st.sidebar.number_input("Slow EMA Max", 10, 100, 40, help="Maximum period for the slow EMA")
 
-    signal_min = st.sidebar.number_input("Signal EMA Min", 2, 30, 9)
-    signal_max = st.sidebar.number_input("Signal EMA Max", 2, 30, 15)
+    st.sidebar.markdown("**Signal EMA:** EMA period for the MACD signal line. Commonly 2 to 30.")
+    signal_min = st.sidebar.number_input("Signal EMA Min", 2, 30, 9, help="Minimum period for the signal EMA")
+    signal_max = st.sidebar.number_input("Signal EMA Max", 2, 30, 15, help="Maximum period for the signal EMA")
 
-    target_pct = st.sidebar.number_input("Target % (from entry)", 1.0, 100.0, 5.0)
-    max_days = st.sidebar.number_input("Max Trading Days to Hit Target", 1, 100, 10)
-    min_trades = st.sidebar.number_input("Minimum Trades Required", 1, 100, 5)
-    min_accuracy = st.sidebar.number_input("Minimum Accuracy %", 1, 100, 40)
+    st.sidebar.header("Optimization Criteria")
+
+    st.sidebar.markdown("**Target %:** The % price increase from entry you want to test hitting.")
+    target_pct = st.sidebar.number_input("Target % (from entry)", 1.0, 100.0, 5.0, help="Target price percentage gain from trade entry")
+
+    st.sidebar.markdown("**Max Trading Days:** Maximum number of trading days to hit the target from entry.")
+    max_days = st.sidebar.number_input("Max Trading Days to Hit Target", 1, 100, 10, help="Days allowed to reach target price")
+
+    st.sidebar.markdown("**Minimum Trades:** Minimum number of trades required to validate parameter combination.")
+    min_trades = st.sidebar.number_input("Minimum Trades Required", 1, 100, 5, help="Minimum trades to consider a parameter valid")
+
+    st.sidebar.markdown("**Minimum Accuracy:** Minimum accuracy % (target hits / trades) for parameter acceptance.")
+    min_accuracy = st.sidebar.number_input("Minimum Accuracy %", 1, 100, 40, help="Minimum accuracy percentage to accept parameters")
 
     # -----------------------------
     # Run Optimization
@@ -95,7 +107,7 @@ if uploaded_file is not None:
                     continue
                 for signal in range(signal_min, signal_max + 1):
                     df = data.copy()
-                    
+
                     # Compute MACD
                     macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - ta.trend.ema_indicator(df["Close"], window=slow)
                     signal_line = macd_line.ewm(span=signal).mean()
@@ -151,4 +163,5 @@ if uploaded_file is not None:
 
         else:
             st.warning("No parameter combinations matched your criteria.")
+
 
