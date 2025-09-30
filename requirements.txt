@@ -1,5 +1,7 @@
 streamlit
 pandas
 numpy
-ta-lib
+ta
 xlsxwriter
+openpyxl
+
