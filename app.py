@@ -53,7 +53,7 @@ if uploaded_file is not None:
         st.error("Unsupported file format")
         st.stop()
 
-    # Ensure proper columns
+    # Validate required columns
     if not set(["Date", "Close"]).issubset(data.columns):
         st.error("File must contain 'Date' and 'Close' columns.")
         st.stop()
@@ -83,14 +83,38 @@ if uploaded_file is not None:
 
     min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1, help="Minimum accuracy percentage to accept parameters")
 
+    # Live calculation of approximate combinations and estimated time
+    fast_range = range(fast_min, fast_max + 1)
+    slow_range = range(slow_min, slow_max + 1)
+    signal_range = range(signal_min, signal_max + 1)
+
+    total_combinations = 0
+    for fast in fast_range:
+        for slow in slow_range:
+            if fast < slow:
+                total_combinations += len(signal_range)
+
+    avg_time_per_combination = 0.1  # seconds per combination, adjust as needed
+    estimated_seconds = total_combinations * avg_time_per_combination
+
+    st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
+    if estimated_seconds < 60:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
+    elif estimated_seconds < 3600:
+        minutes = estimated_seconds / 60
+        st.info(f"⏳ Estimated analysis time: {minutes:.1f} minutes")
+    else:
+        hours = estimated_seconds / 3600
+        st.info(f"⏳ Estimated analysis time: {hours:.2f} hours")
+
     if st.button("🚀 Run Optimization"):
         results = []
 
-        for fast in range(fast_min, fast_max + 1, 1):
-            for slow in range(slow_min, slow_max + 1, 1):
+        for fast in fast_range:
+            for slow in slow_range:
                 if fast >= slow:
                     continue
-                for signal in range(signal_min, signal_max + 1, 1):
+                for signal in signal_range:
                     df = data.copy()
 
                     macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - ta.trend.ema_indicator(df["Close"], window=slow)
@@ -139,4 +163,3 @@ if uploaded_file is not None:
             download_results(top10)
         else:
             st.warning("No parameter combinations matched your criteria.")
-           
