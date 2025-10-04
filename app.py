@@ -22,7 +22,7 @@ def download_results(df):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-st.title("📈 MACD Parameter Optimizer")
+st.title("📈 MACD Parameter Optimizer without max days restriction")
 
 st.markdown("""
 Upload historical price data (1500+ days recommended)  
