@@ -12,14 +12,14 @@ def download_results(df, trade_data=None):
         file_name="top10_macd_results.csv",
         mime="text/csv",
     )
-    
+
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
         if trade_data is not None:
             for i, (params, trades) in enumerate(trade_data.items()):
                 trades.to_excel(writer, index=False, sheet_name=f"Trades_{i+1}")
-    
+
     st.download_button(
         label="📊 Download Top 10 Results (Excel)",
         data=output.getvalue(),
@@ -28,7 +28,7 @@ def download_results(df, trade_data=None):
     )
 
 def macd_optimization_app():
-    st.title("📈 MACD Parameter Optimizer with Pause - Optimized")
+    st.title("📈 MACD Parameter Optimizer - Fast Execution Mode")
 
     st.markdown("""
     Upload historical price data (1500+ days recommended)  
@@ -76,6 +76,8 @@ def macd_optimization_app():
 
         min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1)
 
+        quick_check = st.checkbox("Enable Quick Check (faster approximate filtering)")
+
         fast_range = list(range(fast_min, fast_max + 1))
         slow_range = list(range(slow_min, slow_max + 1))
         signal_range = list(range(signal_min, signal_max + 1))
@@ -86,7 +88,7 @@ def macd_optimization_app():
                 if fast < slow:
                     total_combinations += len(signal_range)
 
-        avg_time_per_combination = 0.05
+        avg_time_per_combination = 0.05 if quick_check else 0.1
         estimated_seconds = total_combinations * avg_time_per_combination
 
         st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
@@ -98,15 +100,8 @@ def macd_optimization_app():
             st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
 
         run_flag = st.button("🚀 Run Optimization")
-        pause_flag = st.button("⏸ Pause")
 
-        if run_flag or "running" not in st.session_state:
-            st.session_state.running = True
-
-        if pause_flag:
-            st.session_state.running = False
-
-        if st.session_state.running:
+        if run_flag:
             results = []
             trade_details = {}
 
@@ -115,9 +110,7 @@ def macd_optimization_app():
             combo_remaining_text = st.empty()
 
             combos_checked = 0
-            stop = False
 
-            # Precompute EMAs for all unique fast and slow windows
             unique_fast = sorted(set(fast_range))
             unique_slow = sorted(set(slow_range))
 
@@ -130,18 +123,20 @@ def macd_optimization_app():
                         continue
                     macd_line = fast_emas[fast] - slow_emas[slow]
 
-                    for signal in signal_range:
-                        if not st.session_state.running:
-                            stop = True
-                            break
+                    if quick_check:
+                        signal_mid = signal_min + (signal_max - signal_min) // 2
+                        signal_line = macd_line.ewm(span=signal_mid).mean()
+                        crossover = (macd_line.shift(1) < signal_line.shift(1)) & (macd_line > signal_line)
+                        if crossover.sum() < min_trades:
+                            continue
 
+                    for signal in signal_range:
                         combos_checked += 1
                         progress_bar.progress(min(combos_checked / total_combinations, 1.0))
                         combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
                         combo_remaining_text.text(f"⌛ Combinations remaining: {total_combinations - combos_checked:,}")
 
                         signal_line = macd_line.ewm(span=signal).mean()
-
                         crossover = (macd_line.shift(1) < signal_line.shift(1)) & (macd_line > signal_line)
                         entries = data.loc[crossover, :].index
                         total_trades = len(entries)
@@ -204,11 +199,6 @@ def macd_optimization_app():
                                 "Accuracy%": round(accuracy, 2)
                             })
                             trade_details[(fast, slow, signal)] = pd.DataFrame(trades_list)
-
-                    if stop:
-                        break
-                if stop:
-                    break
 
             progress_bar.progress(1.0)
             combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
