@@ -4,36 +4,25 @@ import numpy as np
 from io import BytesIO
 import ta
 
-def download_results(top10_df, trade_history_dict):
-    # Create summary sheet (top10)
-    csv = top10_df.to_csv(index=False).encode('utf-8')
+def download_results(df):
+    csv = df.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Download Top 10 Results (CSV)",
         data=csv,
         file_name="top10_macd_results.csv",
         mime="text/csv",
     )
-    
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        top10_df.to_excel(writer, index=False, sheet_name="Top10 Results")
-        
-        # Add detailed trades for each top-10 combination
-        for i, row in top10_df.iterrows():
-            key = (row["FastEMA"], row["SlowEMA"], row["SignalEMA"])
-            trades_df = trade_history_dict.get(key)
-            if trades_df is not None and not trades_df.empty:
-                sheet_name = f"Trades_{row['FastEMA']}_{row['SlowEMA']}_{row['SignalEMA']}"
-                trades_df.to_excel(writer, index=False, sheet_name=sheet_name[:31])  # Excel limit
-            
+        df.to_excel(writer, index=False, sheet_name="Top10 Results")
     st.download_button(
-        label="📊 Download Top 10 Results & Trades (Excel)",
+        label="📊 Download Top 10 Results (Excel)",
         data=output.getvalue(),
         file_name="top10_macd_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-st.title("📈 MACD Parameter Optimizer with trade data")
+st.title("📈 MACD Parameter Optimizer")
 
 st.markdown("""
 Upload historical price data (1500+ days recommended)  
@@ -74,7 +63,12 @@ if uploaded_file is not None:
     signal_max = st.number_input("Signal EMA Max", min_value=2, max_value=30, value=15, step=1)
 
     target_pct = st.number_input("Target % (from entry)", min_value=1.0, max_value=100.0, value=5.0, step=0.1)
+
+    # Removed 100 cap; max_days max_value set to data length
+    max_days = st.number_input("Max Trading Days to Hit Target", min_value=1, max_value=len(data), value=10, step=1)
+
     min_trades = st.number_input("Minimum Trades Required", min_value=1, max_value=100, value=5, step=1)
+
     min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1)
 
     fast_range = range(fast_min, fast_max + 1)
@@ -94,17 +88,17 @@ if uploaded_file is not None:
     if estimated_seconds < 60:
         st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
     elif estimated_seconds < 3600:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds / 60:.1f} minutes")
     else:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds / 3600:.2f} hours")
 
     if st.button("🚀 Run Optimization"):
         results = []
-        trade_history = {}
 
         progress_bar = st.progress(0)
         combo_checked_text = st.empty()
         combo_remaining_text = st.empty()
+
         combos_checked = 0
 
         for fast in fast_range:
@@ -134,46 +128,16 @@ if uploaded_file is not None:
                         continue
 
                     hits = 0
-                    trade_rows = []
                     for entry in entries:
                         entry_price = df.loc[entry, "Close"]
-                        entry_date = df.loc[entry, "Date"]
                         target_price = entry_price * (1 + target_pct / 100)
 
-                        # Search for exit: first future day where Close >= target_price (no day limit now)
-                        subset = df.loc[entry + 1 :]
-                        exit_idx = subset[subset["Close"] >= target_price].head(1).index
+                        # Limit search to max_days after entry (prevent overshoot)
+                        last_idx = min(entry + max_days, len(df) - 1)
+                        subset = df.loc[entry + 1 : last_idx]
 
-                        if len(exit_idx) > 0:
-                            exit_row = exit_idx[0]
+                        if (subset["Close"] >= target_price).any():
                             hits += 1
-                            exit_price = df.loc[exit_row, "Close"]
-                            exit_date = df.loc[exit_row, "Date"]
-                            days_of_holding = (exit_row - entry)
-                            pct_profit = (exit_price - entry_price) / entry_price * 100
-                            trade_rows.append({
-                                "Entry_Date": entry_date,
-                                "Entry_Price": entry_price,
-                                "Exit_Date": exit_date,
-                                "Exit_Price": exit_price,
-                                "Days_Held": days_of_holding,
-                                "Pct_Profit": pct_profit
-                            })
-                        else:
-                            # No target hit: still record
-                            exit_row = subset.index[-1]
-                            exit_price = df.loc[exit_row, "Close"]
-                            exit_date = df.loc[exit_row, "Date"]
-                            days_of_holding = (exit_row - entry)
-                            pct_profit = (exit_price - entry_price) / entry_price * 100
-                            trade_rows.append({
-                                "Entry_Date": entry_date,
-                                "Entry_Price": entry_price,
-                                "Exit_Date": exit_date,
-                                "Exit_Price": exit_price,
-                                "Days_Held": days_of_holding,
-                                "Pct_Profit": pct_profit
-                            })
 
                     accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
 
@@ -186,8 +150,6 @@ if uploaded_file is not None:
                             "Hits": hits,
                             "Accuracy%": round(accuracy, 2)
                         })
-                        # Save trades for download
-                        trade_history[(fast, slow, signal)] = pd.DataFrame(trade_rows)
 
         progress_bar.progress(1.0)
         combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
@@ -199,6 +161,6 @@ if uploaded_file is not None:
             st.write("### Top 10 Results")
             top10 = results_df.head(10)
             st.dataframe(top10)
-            download_results(top10, trade_history)
+            download_results(top10)
         else:
             st.warning("No parameter combinations matched your criteria.")
