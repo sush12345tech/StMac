@@ -4,32 +4,27 @@ import numpy as np
 from io import BytesIO
 import ta
 
-def download_results(df, trades_df):
-    # Download top 10 results (CSV + Excel)
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Top 10 Results (CSV)",
-        data=csv,
-        file_name="top10_macd_results.csv",
-        mime="text/csv",
-    )
+def download_results(df, trades_dict):
+    # Write Top10 + individual trade sheets
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # Summary sheet
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
-        trades_df.to_excel(writer, index=False, sheet_name="Trades")
+        # Individual trade sheets for each top setting
+        for key, trades in trades_dict.items():
+            sheet_name = f"{key[0]}_{key[1]}_{key[2]}"  # Fast_Slow_Signal
+            trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])  # Excel limit 31 chars
     st.download_button(
-        label="📊 Download Full Results (Excel incl. Trades)",
+        label="📊 Download Excel (Top10 + Trades)",
         data=output.getvalue(),
         file_name="macd_results_with_trades.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-st.title("📈 MACD Parameter Optimizer (with Trade List + Open Trades)")
+st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
 
 st.markdown("""
-Upload historical price data (1500+ days recommended)  
-and test MACD parameter combinations to find the most accurate ones
-based on your target conditions.
+Upload historical price data 
 """)
 
 uploaded_file = st.file_uploader("Upload CSV or Excel file (must include 'Date' and 'Close')", type=["csv", "xls", "xlsx"])
@@ -95,7 +90,7 @@ if uploaded_file is not None:
 
     if st.button("🚀 Run Optimization"):
         results = []
-        trades_records = []
+        trades_dict = {}
 
         progress_bar = st.progress(0)
         combo_checked_text = st.empty()
@@ -130,6 +125,8 @@ if uploaded_file is not None:
                         continue
 
                     hits = 0
+                    trades_records = []
+
                     for entry in entries:
                         entry_date = df.loc[entry, "Date"]
                         entry_price = df.loc[entry, "Close"]
@@ -149,7 +146,7 @@ if uploaded_file is not None:
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
                         else:
-                            # open trade or failed
+                            # failed trade (did not hit target in max_days)
                             exit_date = subset.iloc[-1]["Date"]
                             exit_price = subset.iloc[-1]["Close"]
 
@@ -157,9 +154,6 @@ if uploaded_file is not None:
                         pct_return = ((exit_price - entry_price) / entry_price) * 100
 
                         trades_records.append({
-                            "FastEMA": fast,
-                            "SlowEMA": slow,
-                            "SignalEMA": signal,
                             "Entry Date": entry_date,
                             "Entry Price": entry_price,
                             "Exit Date": exit_date,
@@ -180,6 +174,7 @@ if uploaded_file is not None:
                             "Hits": hits,
                             "Accuracy%": round(accuracy, 2)
                         })
+                        trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
 
         progress_bar.progress(1.0)
         combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
@@ -187,19 +182,17 @@ if uploaded_file is not None:
 
         if results:
             results_df = pd.DataFrame(results).sort_values("Accuracy%", ascending=False).reset_index(drop=True)
-            trades_df = pd.DataFrame(trades_records)
 
             st.success(f"✅ Found {len(results_df)} valid combinations")
             st.write("### Top 10 Results")
             top10 = results_df.head(10)
             st.dataframe(top10)
 
-            st.write("### Trades for Top 10 Combinations (including open trades)")
-            trades_top10 = trades_df.merge(top10[["FastEMA", "SlowEMA", "SignalEMA"]],
-                                           on=["FastEMA", "SlowEMA", "SignalEMA"])
-            st.dataframe(trades_top10)
+            # Prepare dict of top10 trades only
+            top10_trades_dict = {k: v for k, v in trades_dict.items() 
+                                 if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]}
 
-            download_results(top10, trades_top10)
+            download_results(top10, top10_trades_dict)
+
         else:
             st.warning("No parameter combinations matched your criteria.")
-       
