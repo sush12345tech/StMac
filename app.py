@@ -28,7 +28,7 @@ def download_results(df, trade_data=None):
     )
 
 def macd_optimization_app():
-    st.title("📈 MACD Parameter Optimizer with Pause")
+    st.title("📈 MACD Parameter Optimizer with Pause - Optimized")
 
     st.markdown("""
     Upload historical price data (1500+ days recommended)  
@@ -76,9 +76,9 @@ def macd_optimization_app():
 
         min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1)
 
-        fast_range = range(fast_min, fast_max + 1)
-        slow_range = range(slow_min, slow_max + 1)
-        signal_range = range(signal_min, signal_max + 1)
+        fast_range = list(range(fast_min, fast_max + 1))
+        slow_range = list(range(slow_min, slow_max + 1))
+        signal_range = list(range(signal_min, signal_max + 1))
 
         total_combinations = 0
         for fast in fast_range:
@@ -86,7 +86,7 @@ def macd_optimization_app():
                 if fast < slow:
                     total_combinations += len(signal_range)
 
-        avg_time_per_combination = 0.1
+        avg_time_per_combination = 0.05
         estimated_seconds = total_combinations * avg_time_per_combination
 
         st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
@@ -115,12 +115,21 @@ def macd_optimization_app():
             combo_remaining_text = st.empty()
 
             combos_checked = 0
-
             stop = False
+
+            # Precompute EMAs for all unique fast and slow windows
+            unique_fast = sorted(set(fast_range))
+            unique_slow = sorted(set(slow_range))
+
+            fast_emas = {f: ta.trend.ema_indicator(data["Close"], window=f) for f in unique_fast}
+            slow_emas = {s: ta.trend.ema_indicator(data["Close"], window=s) for s in unique_slow}
+
             for fast in fast_range:
                 for slow in slow_range:
                     if fast >= slow:
                         continue
+                    macd_line = fast_emas[fast] - slow_emas[slow]
+
                     for signal in signal_range:
                         if not st.session_state.running:
                             stop = True
@@ -131,17 +140,10 @@ def macd_optimization_app():
                         combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
                         combo_remaining_text.text(f"⌛ Combinations remaining: {total_combinations - combos_checked:,}")
 
-                        df = data.copy()
-
-                        macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - ta.trend.ema_indicator(df["Close"], window=slow)
                         signal_line = macd_line.ewm(span=signal).mean()
 
-                        df["MACD"] = macd_line
-                        df["Signal"] = signal_line
-
-                        df["Crossover"] = (df["MACD"].shift(1) < df["Signal"].shift(1)) & (df["MACD"] > df["Signal"])
-
-                        entries = df[df["Crossover"]].index
+                        crossover = (macd_line.shift(1) < signal_line.shift(1)) & (macd_line > signal_line)
+                        entries = data.loc[crossover, :].index
                         total_trades = len(entries)
 
                         if total_trades < min_trades:
@@ -149,13 +151,13 @@ def macd_optimization_app():
 
                         hits = 0
                         trades_list = []
-                        actual_max_days = max_days if max_days > 0 else len(df) - 1
+                        actual_max_days = max_days if max_days > 0 else len(data) - 1
 
                         for entry in entries:
-                            entry_price = df.loc[entry, "Close"]
+                            entry_price = data.loc[entry, "Close"]
                             target_price = entry_price * (1 + target_pct / 100)
 
-                            subset = df.loc[entry + 1 : entry + actual_max_days]
+                            subset = data.loc[entry + 1 : entry + actual_max_days]
                             hit_target = False
 
                             for idx, row in subset.iterrows():
@@ -164,10 +166,10 @@ def macd_optimization_app():
                                     hit_target = True
                                     exit_date = row["Date"]
                                     exit_price = row["Close"]
-                                    holding_days = (exit_date - df.loc[entry, "Date"]).days
+                                    holding_days = (exit_date - data.loc[entry, "Date"]).days
                                     pct_profit = (exit_price - entry_price) / entry_price * 100
                                     trades_list.append({
-                                        "EntryDate": df.loc[entry, "Date"],
+                                        "EntryDate": data.loc[entry, "Date"],
                                         "EntryPrice": entry_price,
                                         "ExitDate": exit_date,
                                         "ExitPrice": exit_price,
@@ -177,13 +179,12 @@ def macd_optimization_app():
                                     break
 
                             if not hit_target:
-                                # Trade exited at last date in subset
                                 exit_date = subset.iloc[-1]["Date"]
                                 exit_price = subset.iloc[-1]["Close"]
-                                holding_days = (exit_date - df.loc[entry, "Date"]).days
+                                holding_days = (exit_date - data.loc[entry, "Date"]).days
                                 pct_profit = (exit_price - entry_price) / entry_price * 100
                                 trades_list.append({
-                                    "EntryDate": df.loc[entry, "Date"],
+                                    "EntryDate": data.loc[entry, "Date"],
                                     "EntryPrice": entry_price,
                                     "ExitDate": exit_date,
                                     "ExitPrice": exit_price,
