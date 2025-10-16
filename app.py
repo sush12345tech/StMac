@@ -5,15 +5,13 @@ from io import BytesIO
 import ta
 
 def download_results(df, trades_dict):
-    # Write Top10 + individual trade sheets
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Summary sheet
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
-        # Individual trade sheets for each top setting
         for key, trades in trades_dict.items():
-            sheet_name = f"{key[0]}_{key[1]}_{key[2]}"  # Fast_Slow_Signal
-            trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])  # Excel limit 31 chars
+            # Create sheet name with combination details, truncated to max 31 chars
+            sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
+            trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
     st.download_button(
         label="📊 Download Excel (Top10 + Trades)",
         data=output.getvalue(),
@@ -23,11 +21,12 @@ def download_results(df, trades_dict):
 
 st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
 
-st.markdown("""
-Upload historical price data 
-""")
+st.markdown("Upload historical price data")
 
-uploaded_file = st.file_uploader("Upload CSV or Excel file (must include 'Date' and 'Close')", type=["csv", "xls", "xlsx"])
+uploaded_file = st.file_uploader(
+    "Upload CSV or Excel file (must include 'Date' and 'Close')", 
+    type=["csv", "xls", "xlsx"]
+)
 
 if uploaded_file is not None:
     file_ext = uploaded_file.name.split(".")[-1].lower()
@@ -60,11 +59,8 @@ if uploaded_file is not None:
     signal_max = st.number_input("Signal EMA Max", min_value=2, max_value=30, value=15, step=1)
 
     target_pct = st.number_input("Target % (from entry)", min_value=1.0, max_value=100.0, value=5.0, step=0.1)
-
     max_days = st.number_input("Max Trading Days to Hit Target", min_value=1, max_value=len(data), value=10, step=1)
-
     min_trades = st.number_input("Minimum Trades Required", min_value=1, max_value=100, value=5, step=1)
-
     min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1)
 
     fast_range = range(fast_min, fast_max + 1)
@@ -77,7 +73,7 @@ if uploaded_file is not None:
             if fast < slow:
                 total_combinations += len(signal_range)
 
-    avg_time_per_combination = 0.1
+    avg_time_per_combination = 0.1  # seconds per combination (estimate)
     estimated_seconds = total_combinations * avg_time_per_combination
 
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
@@ -146,9 +142,12 @@ if uploaded_file is not None:
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
                         else:
-                            # failed trade (did not hit target in max_days)
-                            exit_date = subset.iloc[-1]["Date"]
-                            exit_price = subset.iloc[-1]["Close"]
+                            if not subset.empty:
+                                exit_date = subset.iloc[-1]["Date"]
+                                exit_price = subset.iloc[-1]["Close"]
+                            else:
+                                exit_date = entry_date
+                                exit_price = entry_price
 
                         days_held = (exit_date - entry_date).days
                         pct_return = ((exit_price - entry_price) / entry_price) * 100
@@ -182,16 +181,17 @@ if uploaded_file is not None:
 
         if results:
             results_df = pd.DataFrame(results).sort_values("Accuracy%", ascending=False).reset_index(drop=True)
-
             st.success(f"✅ Found {len(results_df)} valid combinations")
             st.write("### Top 10 Results")
             top10 = results_df.head(10)
             st.dataframe(top10)
 
-            # Prepare dict of top10 trades only
-            top10_trades_dict = {k: v for k, v in trades_dict.items() 
-                                 if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]}
+            top10_trades_dict = {
+                k: v for k, v in trades_dict.items()
+                if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]
+            }
 
+            # Show download button with top 10 + trades sheets
             download_results(top10, top10_trades_dict)
 
         else:
