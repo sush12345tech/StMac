@@ -31,11 +31,8 @@ if uploaded_file is not None:
     file_ext = uploaded_file.name.split(".")[-1].lower()
     if file_ext == "csv":
         data = pd.read_csv(uploaded_file)
-    elif file_ext in ["xls", "xlsx"]:
-        data = pd.read_excel(uploaded_file, engine="openpyxl")
     else:
-        st.error("Unsupported file format")
-        st.stop()
+        data = pd.read_excel(uploaded_file, engine="openpyxl")
 
     if not set(["Date", "Close"]).issubset(data.columns):
         st.error("File must contain 'Date' and 'Close' columns.")
@@ -62,28 +59,16 @@ if uploaded_file is not None:
     slow_range = range(slow_min, slow_max + 1)
     signal_range = range(signal_min, signal_max + 1)
 
-    total_combinations = sum(
-        len(signal_range)
-        for fast in fast_range
-        for slow in slow_range
-        if fast < slow
-    )
-
     if st.button("🚀 Run Optimization"):
 
         results = []
         trades_dict = {}
-        combos_checked = 0
-        progress_bar = st.progress(0)
 
         for fast in fast_range:
             for slow in slow_range:
                 if fast >= slow:
                     continue
                 for signal in signal_range:
-
-                    combos_checked += 1
-                    progress_bar.progress(min(combos_checked / total_combinations, 1.0))
 
                     df = data.copy()
 
@@ -108,6 +93,7 @@ if uploaded_file is not None:
 
                     hits = 0
                     above_zero_count = 0
+                    below_zero_count = 0
                     above_zero_hits = 0
                     below_zero_hits = 0
 
@@ -125,6 +111,7 @@ if uploaded_file is not None:
                             is_above = True
                         else:
                             crossover_position = "Below Zero"
+                            below_zero_count += 1
                             is_above = False
 
                         last_idx = min(entry + max_days, len(df) - 1)
@@ -165,18 +152,25 @@ if uploaded_file is not None:
                         })
 
                     accuracy = (hits / total_trades) * 100
-                    percent_above_cross = (above_zero_count / total_trades) * 100
-                    percent_above_hit_total = (above_zero_hits / total_trades) * 100
-                    percent_below_hit_total = (below_zero_hits / total_trades) * 100
 
                     if accuracy >= min_accuracy:
+
+                        percent_above_cross = (above_zero_count / total_trades) * 100
+                        percent_above_hit_total = (above_zero_hits / total_trades) * 100
+                        percent_below_hit_total = (below_zero_hits / total_trades) * 100
+
+                        # TRUE ZONE ACCURACY
+                        accuracy_above_zone = (above_zero_hits / above_zero_count) * 100 if above_zero_count > 0 else 0
+                        accuracy_below_zone = (below_zero_hits / below_zero_count) * 100 if below_zero_count > 0 else 0
 
                         trades_df = pd.DataFrame(trades_records)
 
                         summary_rows = pd.DataFrame([
                             {"Crossover Position": f"% Crossed Above Zero = {round(percent_above_cross,2)}%"},
                             {"Crossover Position": f"% Target Hit (Above Zero) / Total Trades = {round(percent_above_hit_total,2)}%"},
-                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"}
+                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"},
+                            {"Crossover Position": f"Accuracy of Above-Zero Trades = {round(accuracy_above_zone,2)}%"},
+                            {"Crossover Position": f"Accuracy of Below-Zero Trades = {round(accuracy_below_zone,2)}%"}
                         ])
 
                         trades_df = pd.concat([trades_df, summary_rows], ignore_index=True)
@@ -196,8 +190,6 @@ if uploaded_file is not None:
             results_df = pd.DataFrame(results).sort_values(
                 "Accuracy%", ascending=False
             ).reset_index(drop=True)
-
-            st.success(f"✅ Found {len(results_df)} valid combinations")
 
             top10 = results_df.head(10)
             st.dataframe(top10)
