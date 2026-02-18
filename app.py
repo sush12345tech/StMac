@@ -22,8 +22,6 @@ def download_results(df, trades_dict):
 
 st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
 
-st.markdown("Upload historical price data")
-
 uploaded_file = st.file_uploader(
     "Upload CSV or Excel file (must include 'Date' and 'Close')", 
     type=["csv", "xls", "xlsx"]
@@ -46,23 +44,19 @@ if uploaded_file is not None:
     data["Date"] = pd.to_datetime(data["Date"])
     data = data.sort_values("Date").reset_index(drop=True)
 
-    st.write("### Data Preview", data.head())
+    fast_min = st.number_input("Fast EMA Min", 2, 50, 12)
+    fast_max = st.number_input("Fast EMA Max", 2, 50, 20)
 
-    st.markdown("### Enter MACD Parameter Ranges and Optimization Criteria")
+    slow_min = st.number_input("Slow EMA Min", 10, 100, 26)
+    slow_max = st.number_input("Slow EMA Max", 10, 100, 40)
 
-    fast_min = st.number_input("Fast EMA Min", min_value=2, max_value=50, value=12, step=1)
-    fast_max = st.number_input("Fast EMA Max", min_value=2, max_value=50, value=20, step=1)
+    signal_min = st.number_input("Signal EMA Min", 2, 30, 9)
+    signal_max = st.number_input("Signal EMA Max", 2, 30, 15)
 
-    slow_min = st.number_input("Slow EMA Min", min_value=10, max_value=100, value=26, step=1)
-    slow_max = st.number_input("Slow EMA Max", min_value=10, max_value=100, value=40, step=1)
-
-    signal_min = st.number_input("Signal EMA Min", min_value=2, max_value=30, value=9, step=1)
-    signal_max = st.number_input("Signal EMA Max", min_value=2, max_value=30, value=15, step=1)
-
-    target_pct = st.number_input("Target % (from entry)", min_value=1.0, max_value=100.0, value=5.0, step=0.1)
-    max_days = st.number_input("Max Trading Days to Hit Target", min_value=1, max_value=len(data), value=10, step=1)
-    min_trades = st.number_input("Minimum Trades Required", min_value=1, max_value=100, value=5, step=1)
-    min_accuracy = st.number_input("Minimum Accuracy %", min_value=1, max_value=100, value=40, step=1)
+    target_pct = st.number_input("Target %", 1.0, 100.0, 5.0)
+    max_days = st.number_input("Max Days", 1, len(data), 10)
+    min_trades = st.number_input("Minimum Trades", 1, 100, 5)
+    min_accuracy = st.number_input("Minimum Accuracy %", 1, 100, 40)
 
     fast_range = range(fast_min, fast_max + 1)
     slow_range = range(slow_min, slow_max + 1)
@@ -80,7 +74,6 @@ if uploaded_file is not None:
         results = []
         trades_dict = {}
         combos_checked = 0
-
         progress_bar = st.progress(0)
 
         for fast in fast_range:
@@ -114,8 +107,11 @@ if uploaded_file is not None:
                         continue
 
                     hits = 0
-                    trades_records = []
                     above_zero_count = 0
+                    above_zero_hits = 0
+                    below_zero_hits = 0
+
+                    trades_records = []
 
                     for entry in entries:
 
@@ -123,12 +119,13 @@ if uploaded_file is not None:
                         entry_price = df.loc[entry, "Close"]
                         target_price = entry_price * (1 + target_pct / 100)
 
-                        # Determine crossover position
                         if df.loc[entry, "MACD"] > 0 and df.loc[entry, "Signal"] > 0:
                             crossover_position = "Above Zero"
                             above_zero_count += 1
+                            is_above = True
                         else:
                             crossover_position = "Below Zero"
+                            is_above = False
 
                         last_idx = min(entry + max_days, len(df) - 1)
                         subset = df.loc[entry + 1 : last_idx]
@@ -143,6 +140,12 @@ if uploaded_file is not None:
                             hits += 1
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
+
+                            if is_above:
+                                above_zero_hits += 1
+                            else:
+                                below_zero_hits += 1
+
                         elif not subset.empty:
                             exit_date = subset.iloc[-1]["Date"]
                             exit_price = subset.iloc[-1]["Close"]
@@ -162,28 +165,21 @@ if uploaded_file is not None:
                         })
 
                     accuracy = (hits / total_trades) * 100
-                    percent_above = (above_zero_count / total_trades) * 100
+                    percent_above_cross = (above_zero_count / total_trades) * 100
+                    percent_above_hit_total = (above_zero_hits / total_trades) * 100
+                    percent_below_hit_total = (below_zero_hits / total_trades) * 100
 
                     if accuracy >= min_accuracy:
 
                         trades_df = pd.DataFrame(trades_records)
 
-                        # Add summary row at end
-                        summary_row = {
-                            "Entry Date": "",
-                            "Entry Price": "",
-                            "Exit Date": "",
-                            "Exit Price": "",
-                            "Days Held": "",
-                            "Pct Return": "",
-                            "Target Hit": "",
-                            "Crossover Position": f"% Crossed Above Zero = {round(percent_above,2)}%"
-                        }
+                        summary_rows = pd.DataFrame([
+                            {"Crossover Position": f"% Crossed Above Zero = {round(percent_above_cross,2)}%"},
+                            {"Crossover Position": f"% Target Hit (Above Zero) / Total Trades = {round(percent_above_hit_total,2)}%"},
+                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"}
+                        ])
 
-                        trades_df = pd.concat(
-                            [trades_df, pd.DataFrame([summary_row])],
-                            ignore_index=True
-                        )
+                        trades_df = pd.concat([trades_df, summary_rows], ignore_index=True)
 
                         results.append({
                             "FastEMA": fast,
@@ -197,7 +193,6 @@ if uploaded_file is not None:
                         trades_dict[(fast, slow, signal)] = trades_df
 
         if results:
-
             results_df = pd.DataFrame(results).sort_values(
                 "Accuracy%", ascending=False
             ).reset_index(drop=True)
