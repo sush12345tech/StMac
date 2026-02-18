@@ -8,10 +8,11 @@ def download_results(df, trades_dict):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
+        
         for key, trades in trades_dict.items():
-            # Create sheet name with combination details, truncated to max 31 chars
             sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
             trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+    
     st.download_button(
         label="📊 Download Excel (Top10 + Trades)",
         data=output.getvalue(),
@@ -67,52 +68,44 @@ if uploaded_file is not None:
     slow_range = range(slow_min, slow_max + 1)
     signal_range = range(signal_min, signal_max + 1)
 
-    total_combinations = 0
-    for fast in fast_range:
-        for slow in slow_range:
-            if fast < slow:
-                total_combinations += len(signal_range)
-
-    avg_time_per_combination = 0.1  # seconds per combination (estimate)
-    estimated_seconds = total_combinations * avg_time_per_combination
-
-    st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
-    if estimated_seconds < 60:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
-    elif estimated_seconds < 3600:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds / 60:.1f} minutes")
-    else:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds / 3600:.2f} hours")
+    total_combinations = sum(
+        len(signal_range)
+        for fast in fast_range
+        for slow in slow_range
+        if fast < slow
+    )
 
     if st.button("🚀 Run Optimization"):
+
         results = []
         trades_dict = {}
+        combos_checked = 0
 
         progress_bar = st.progress(0)
-        combo_checked_text = st.empty()
-        combo_remaining_text = st.empty()
-
-        combos_checked = 0
 
         for fast in fast_range:
             for slow in slow_range:
                 if fast >= slow:
                     continue
                 for signal in signal_range:
+
                     combos_checked += 1
                     progress_bar.progress(min(combos_checked / total_combinations, 1.0))
-                    combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
-                    combo_remaining_text.text(f"⌛ Combinations remaining: {total_combinations - combos_checked:,}")
 
                     df = data.copy()
 
-                    macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - ta.trend.ema_indicator(df["Close"], window=slow)
+                    macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - \
+                                ta.trend.ema_indicator(df["Close"], window=slow)
+
                     signal_line = macd_line.ewm(span=signal).mean()
 
                     df["MACD"] = macd_line
                     df["Signal"] = signal_line
 
-                    df["Crossover"] = (df["MACD"].shift(1) < df["Signal"].shift(1)) & (df["MACD"] > df["Signal"])
+                    df["Crossover"] = (
+                        (df["MACD"].shift(1) < df["Signal"].shift(1)) &
+                        (df["MACD"] > df["Signal"])
+                    )
 
                     entries = df[df["Crossover"]].index
                     total_trades = len(entries)
@@ -122,17 +115,26 @@ if uploaded_file is not None:
 
                     hits = 0
                     trades_records = []
+                    above_zero_count = 0
 
                     for entry in entries:
+
                         entry_date = df.loc[entry, "Date"]
                         entry_price = df.loc[entry, "Close"]
                         target_price = entry_price * (1 + target_pct / 100)
 
+                        # Determine crossover position
+                        if df.loc[entry, "MACD"] > 0 and df.loc[entry, "Signal"] > 0:
+                            crossover_position = "Above Zero"
+                            above_zero_count += 1
+                        else:
+                            crossover_position = "Below Zero"
+
                         last_idx = min(entry + max_days, len(df) - 1)
                         subset = df.loc[entry + 1 : last_idx]
 
-                        exit_price = None
-                        exit_date = None
+                        exit_price = entry_price
+                        exit_date = entry_date
                         hit = False
 
                         hit_rows = subset[subset["Close"] >= target_price]
@@ -141,13 +143,9 @@ if uploaded_file is not None:
                             hits += 1
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
-                        else:
-                            if not subset.empty:
-                                exit_date = subset.iloc[-1]["Date"]
-                                exit_price = subset.iloc[-1]["Close"]
-                            else:
-                                exit_date = entry_date
-                                exit_price = entry_price
+                        elif not subset.empty:
+                            exit_date = subset.iloc[-1]["Date"]
+                            exit_price = subset.iloc[-1]["Close"]
 
                         days_held = (exit_date - entry_date).days
                         pct_return = ((exit_price - entry_price) / entry_price) * 100
@@ -159,12 +157,34 @@ if uploaded_file is not None:
                             "Exit Price": exit_price,
                             "Days Held": days_held,
                             "Pct Return": round(pct_return, 2),
-                            "Target Hit": hit
+                            "Target Hit": hit,
+                            "Crossover Position": crossover_position
                         })
 
-                    accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
+                    accuracy = (hits / total_trades) * 100
+                    percent_above = (above_zero_count / total_trades) * 100
 
                     if accuracy >= min_accuracy:
+
+                        trades_df = pd.DataFrame(trades_records)
+
+                        # Add summary row at end
+                        summary_row = {
+                            "Entry Date": "",
+                            "Entry Price": "",
+                            "Exit Date": "",
+                            "Exit Price": "",
+                            "Days Held": "",
+                            "Pct Return": "",
+                            "Target Hit": "",
+                            "Crossover Position": f"% Crossed Above Zero = {round(percent_above,2)}%"
+                        }
+
+                        trades_df = pd.concat(
+                            [trades_df, pd.DataFrame([summary_row])],
+                            ignore_index=True
+                        )
+
                         results.append({
                             "FastEMA": fast,
                             "SlowEMA": slow,
@@ -173,16 +193,17 @@ if uploaded_file is not None:
                             "Hits": hits,
                             "Accuracy%": round(accuracy, 2)
                         })
-                        trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
 
-        progress_bar.progress(1.0)
-        combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
-        combo_remaining_text.text(f"⌛ Combinations remaining: 0")
+                        trades_dict[(fast, slow, signal)] = trades_df
 
         if results:
-            results_df = pd.DataFrame(results).sort_values("Accuracy%", ascending=False).reset_index(drop=True)
+
+            results_df = pd.DataFrame(results).sort_values(
+                "Accuracy%", ascending=False
+            ).reset_index(drop=True)
+
             st.success(f"✅ Found {len(results_df)} valid combinations")
-            st.write("### Top 10 Results")
+
             top10 = results_df.head(10)
             st.dataframe(top10)
 
@@ -191,7 +212,6 @@ if uploaded_file is not None:
                 if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]
             }
 
-            # Show download button with top 10 + trades sheets
             download_results(top10, top10_trades_dict)
 
         else:
