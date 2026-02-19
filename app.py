@@ -86,10 +86,6 @@ if uploaded_file is not None:
                     )
 
                     entries = df[df["Crossover"]].index
-                    total_trades = len(entries)
-
-                    if total_trades < min_trades:
-                        continue
 
                     hits = 0
                     above_zero_count = 0
@@ -99,7 +95,7 @@ if uploaded_file is not None:
 
                     trades_records = []
 
-                    for entry in entries:
+                    for i, entry in enumerate(entries):
 
                         entry_date = df.loc[entry, "Date"]
                         entry_price = df.loc[entry, "Close"]
@@ -107,11 +103,9 @@ if uploaded_file is not None:
 
                         if df.loc[entry, "MACD"] > 0 and df.loc[entry, "Signal"] > 0:
                             crossover_position = "Above Zero"
-                            above_zero_count += 1
                             is_above = True
                         else:
                             crossover_position = "Below Zero"
-                            below_zero_count += 1
                             is_above = False
 
                         last_idx = min(entry + max_days, len(df) - 1)
@@ -124,15 +118,8 @@ if uploaded_file is not None:
                         hit_rows = subset[subset["Close"] >= target_price]
                         if not hit_rows.empty:
                             hit = True
-                            hits += 1
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
-
-                            if is_above:
-                                above_zero_hits += 1
-                            else:
-                                below_zero_hits += 1
-
                         elif not subset.empty:
                             exit_date = subset.iloc[-1]["Date"]
                             exit_price = subset.iloc[-1]["Close"]
@@ -151,55 +138,31 @@ if uploaded_file is not None:
                             "Crossover Position": crossover_position
                         })
 
-                    accuracy = (hits / total_trades) * 100
+                    # --------- REMOVE LAST TRADE IF TARGET HIT = FALSE ----------
+                    if trades_records:
+                        if trades_records[-1]["Target Hit"] is False:
+                            trades_records = trades_records[:-1]
+
+                    total_trades = len(trades_records)
+
+                    if total_trades < min_trades:
+                        continue
+
+                    for trade in trades_records:
+                        if trade["Crossover Position"] == "Above Zero":
+                            above_zero_count += 1
+                            if trade["Target Hit"]:
+                                above_zero_hits += 1
+                                hits += 1
+                        else:
+                            below_zero_count += 1
+                            if trade["Target Hit"]:
+                                below_zero_hits += 1
+                                hits += 1
+
+                    accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
 
                     if accuracy >= min_accuracy:
 
                         percent_above_cross = (above_zero_count / total_trades) * 100
-                        percent_above_hit_total = (above_zero_hits / total_trades) * 100
-                        percent_below_hit_total = (below_zero_hits / total_trades) * 100
-
-                        # TRUE ZONE ACCURACY
-                        accuracy_above_zone = (above_zero_hits / above_zero_count) * 100 if above_zero_count > 0 else 0
-                        accuracy_below_zone = (below_zero_hits / below_zero_count) * 100 if below_zero_count > 0 else 0
-
-                        trades_df = pd.DataFrame(trades_records)
-
-                        summary_rows = pd.DataFrame([
-                            {"Crossover Position": f"% Crossed Above Zero = {round(percent_above_cross,2)}%"},
-                            {"Crossover Position": f"% Target Hit (Above Zero) / Total Trades = {round(percent_above_hit_total,2)}%"},
-                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"},
-                            {"Crossover Position": f"Accuracy of Above-Zero Trades = {round(accuracy_above_zone,2)}%"},
-                            {"Crossover Position": f"Accuracy of Below-Zero Trades = {round(accuracy_below_zone,2)}%"}
-                        ])
-
-                        trades_df = pd.concat([trades_df, summary_rows], ignore_index=True)
-
-                        results.append({
-                            "FastEMA": fast,
-                            "SlowEMA": slow,
-                            "SignalEMA": signal,
-                            "Trades": total_trades,
-                            "Hits": hits,
-                            "Accuracy%": round(accuracy, 2)
-                        })
-
-                        trades_dict[(fast, slow, signal)] = trades_df
-
-        if results:
-            results_df = pd.DataFrame(results).sort_values(
-                "Accuracy%", ascending=False
-            ).reset_index(drop=True)
-
-            top10 = results_df.head(10)
-            st.dataframe(top10)
-
-            top10_trades_dict = {
-                k: v for k, v in trades_dict.items()
-                if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]
-            }
-
-            download_results(top10, top10_trades_dict)
-
-        else:
-            st.warning("No parameter combinations matched your criteria.")
+                        percent_above_hit_total = (above_zero
