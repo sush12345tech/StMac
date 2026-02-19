@@ -165,4 +165,49 @@ if uploaded_file is not None:
                     if accuracy >= min_accuracy:
 
                         percent_above_cross = (above_zero_count / total_trades) * 100
-                        percent_above_hit_total = (above_zero
+                        percent_above_hit_total = (above_zero_hits / total_trades) * 100
+                        percent_below_hit_total = (below_zero_hits / total_trades) * 100
+
+                        accuracy_above_zone = (above_zero_hits / above_zero_count) * 100 if above_zero_count > 0 else 0
+                        accuracy_below_zone = (below_zero_hits / below_zero_count) * 100 if below_zero_count > 0 else 0
+
+                        trades_df = pd.DataFrame(trades_records)
+
+                        summary_rows = pd.DataFrame([
+                            {"Crossover Position": f"% Crossed Above Zero = {round(percent_above_cross,2)}%"},
+                            {"Crossover Position": f"% Target Hit (Above Zero) / Total Trades = {round(percent_above_hit_total,2)}%"},
+                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"},
+                            {"Crossover Position": f"Accuracy of Above-Zero Trades = {round(accuracy_above_zone,2)}%"},
+                            {"Crossover Position": f"Accuracy of Below-Zero Trades = {round(accuracy_below_zone,2)}%"}
+                        ])
+
+                        trades_df = pd.concat([trades_df, summary_rows], ignore_index=True)
+
+                        results.append({
+                            "FastEMA": fast,
+                            "SlowEMA": slow,
+                            "SignalEMA": signal,
+                            "Trades": total_trades,
+                            "Hits": hits,
+                            "Accuracy%": round(accuracy, 2)
+                        })
+
+                        trades_dict[(fast, slow, signal)] = trades_df
+
+        if results:
+            results_df = pd.DataFrame(results).sort_values(
+                "Accuracy%", ascending=False
+            ).reset_index(drop=True)
+
+            top10 = results_df.head(10)
+            st.dataframe(top10)
+
+            top10_trades_dict = {
+                k: v for k, v in trades_dict.items()
+                if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]
+            }
+
+            download_results(top10, top10_trades_dict)
+
+        else:
+            st.warning("No parameter combinations matched your criteria.")
