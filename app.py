@@ -253,4 +253,4 @@ if uploaded_file is not None:
             download_results(top10, top10_trades_dict)
 
         else:
-            st.warning("No parameter combinations matched your criteria.")
+            st.warning("No parameter combinations matched your criteria.") 
