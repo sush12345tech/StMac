@@ -4,6 +4,7 @@ import numpy as np
 from io import BytesIO
 import ta
 
+
 # ==============================
 # Excel Download Function
 # ==============================
@@ -28,7 +29,7 @@ def download_results(df, trades_dict):
 # ==============================
 # App Title
 # ==============================
-st.title("📈 MACD with Parameter Optimizer (Top10 + Trades per Sheets)")
+st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
 st.markdown("Upload historical price data")
 
 uploaded_file = st.file_uploader(
@@ -86,12 +87,44 @@ if uploaded_file is not None:
     signal_range = range(signal_min, signal_max + 1)
 
     # ==============================
+    # Combination Estimation
+    # ==============================
+    total_combinations = 0
+    for fast in fast_range:
+        for slow in slow_range:
+            if fast < slow:
+                total_combinations += len(signal_range)
+
+    avg_time_per_combination = 0.1
+    estimated_seconds = total_combinations * avg_time_per_combination
+
+    st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
+
+    # ✅ NEW FIX 1 — Prevent division by zero
+    if total_combinations == 0:
+        st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
+        st.stop()
+
+    if estimated_seconds < 60:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
+    elif estimated_seconds < 3600:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
+    else:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
+
+    # ==============================
     # Run Optimization
     # ==============================
     if st.button("🚀 Run Optimization"):
 
         results = []
         trades_dict = {}
+
+        progress_bar = st.progress(0)
+        combo_checked_text = st.empty()
+        combo_remaining_text = st.empty()
+
+        combos_checked = 0
 
         for fast in fast_range:
             for slow in slow_range:
@@ -100,6 +133,19 @@ if uploaded_file is not None:
                     continue
 
                 for signal in signal_range:
+
+                    combos_checked += 1
+
+                    # ✅ NEW FIX 2 — Force Python float
+                    progress_value = float(min(combos_checked / total_combinations, 1.0))
+                    progress_bar.progress(progress_value)
+
+                    combo_checked_text.text(
+                        f"✅ Combinations checked: {combos_checked:,}"
+                    )
+                    combo_remaining_text.text(
+                        f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
+                    )
 
                     df = data.copy()
 
@@ -155,7 +201,9 @@ if uploaded_file is not None:
                                 exit_price = entry_price
 
                         days_held = (exit_date - entry_date).days
-                        pct_return = ((exit_price - entry_price) / entry_price) * 100
+                        pct_return = (
+                            (exit_price - entry_price) / entry_price
+                        ) * 100
 
                         trades_records.append({
                             "Entry Date": entry_date,
@@ -181,7 +229,13 @@ if uploaded_file is not None:
 
                         trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
 
+        progress_bar.progress(1.0)
+
+        combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
+        combo_remaining_text.text("⌛ Combinations remaining: 0")
+
         if results:
+
             results_df = (
                 pd.DataFrame(results)
                 .sort_values("Accuracy%", ascending=False)
@@ -189,6 +243,7 @@ if uploaded_file is not None:
             )
 
             st.success(f"✅ Found {len(results_df)} valid combinations")
+
             st.write("### Top 10 Results")
             top10 = results_df.head(10)
             st.dataframe(top10)
@@ -204,4 +259,4 @@ if uploaded_file is not None:
             download_results(top10, top10_trades_dict)
 
         else:
-            st.warning("⚠️ No parameter combinations matched your criteria.")
+            st.warning("No parameter combinations matched your criteria.")
