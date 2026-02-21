@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import ta
-
+import time
 
 # ==============================
 # Excel Download Function
@@ -30,7 +30,6 @@ def download_results(df, trades_dict):
     else:
         st.error("No data available for download.")
 
-
 # ==============================
 # App Title
 # ==============================
@@ -43,7 +42,6 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-
     # ==============================
     # Read File
     # ==============================
@@ -128,125 +126,118 @@ if uploaded_file is not None:
         progress_bar = st.progress(0.0)
         combo_checked_text = st.empty()
         combo_remaining_text = st.empty()
-
         combos_checked = 0
 
-        for fast in fast_range:
-            for slow in slow_range:
+        # Wrap entire loop with spinner for better UX
+        with st.spinner("Processing parameter combinations..."):
+            try:
+                for fast in fast_range:
+                    for slow in slow_range:
+                        if fast >= slow:
+                            continue
+                        for signal in signal_range:
+                            combos_checked += 1
 
-                if fast >= slow:
-                    continue
-
-                for signal in signal_range:
-
-                    combos_checked += 1
-
-                    # ✅ FIX: Always ensure progress value is between 0 and 1
-                    if total_combinations > 0:
-                        progress_value = float(combos_checked) / float(total_combinations)
-                    else:
-                        progress_value = 0.0
-                    progress_value = min(max(progress_value, 0.0), 1.0)
-
-                    # Debug: Optional, remove in production
-                    # st.write(f"Debug: combos_checked={combos_checked}, total_combinations={total_combinations}, progress_value={progress_value}")
-
-                    progress_bar.progress(progress_value)
-
-                    combo_checked_text.text(
-                        f"✅ Combinations checked: {combos_checked:,}"
-                    )
-                    combo_remaining_text.text(
-                        f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
-                    )
-
-                    df = data.copy()
-
-                    macd_line = (
-                        ta.trend.ema_indicator(df["Close"], window=fast)
-                        - ta.trend.ema_indicator(df["Close"], window=slow)
-                    )
-                    signal_line = macd_line.ewm(span=signal).mean()
-
-                    df["MACD"] = macd_line
-                    df["Signal"] = signal_line
-
-                    df["Crossover"] = (
-                        (df["MACD"].shift(1) < df["Signal"].shift(1))
-                        & (df["MACD"] > df["Signal"])
-                    )
-
-                    entries = df[df["Crossover"]].index
-                    total_trades = len(entries)
-
-                    if total_trades < min_trades:
-                        continue
-
-                    hits = 0
-                    trades_records = []
-
-                    for entry in entries:
-
-                        entry_date = df.loc[entry, "Date"]
-                        entry_price = df.loc[entry, "Close"]
-                        target_price = entry_price * (1 + target_pct / 100)
-
-                        last_idx = min(entry + max_days, len(df) - 1)
-                        subset = df.loc[entry + 1:last_idx]
-
-                        exit_price = None
-                        exit_date = None
-                        hit = False
-
-                        hit_rows = subset[subset["Close"] >= target_price]
-
-                        if not hit_rows.empty:
-                            hit = True
-                            hits += 1
-                            exit_date = hit_rows.iloc[0]["Date"]
-                            exit_price = hit_rows.iloc[0]["Close"]
-                        else:
-                            if not subset.empty:
-                                exit_date = subset.iloc[-1]["Date"]
-                                exit_price = subset.iloc[-1]["Close"]
+                            # Calculate progress
+                            if total_combinations > 0:
+                                progress_value = float(combos_checked) / float(total_combinations)
                             else:
-                                exit_date = entry_date
-                                exit_price = entry_price
+                                progress_value = 0.0
+                            progress_value = min(max(progress_value, 0.0), 1.0)
 
-                        days_held = (exit_date - entry_date).days
-                        pct_return = (
-                            (exit_price - entry_price) / entry_price
-                        ) * 100
+                            # Update progress bar and texts
+                            progress_bar.progress(progress_value)
+                            combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
+                            combo_remaining_text.text(f"⌛ Combinations remaining: {total_combinations - combos_checked:,}")
 
-                        trades_records.append({
-                            "Entry Date": entry_date,
-                            "Entry Price": entry_price,
-                            "Exit Date": exit_date,
-                            "Exit Price": exit_price,
-                            "Days Held": days_held,
-                            "Pct Return": round(pct_return, 2),
-                            "Target Hit": hit
-                        })
+                            # Slight delay for UI responsiveness
+                            time.sleep(0.001)
 
-                    accuracy = (hits / total_trades) * 100
+                            # MACD Calculation
+                            df = data.copy()
 
-                    if accuracy >= min_accuracy:
-                        results.append({
-                            "FastEMA": fast,
-                            "SlowEMA": slow,
-                            "SignalEMA": signal,
-                            "Trades": total_trades,
-                            "Hits": hits,
-                            "Accuracy%": round(accuracy, 2)
-                        })
+                            macd_line = (
+                                ta.trend.ema_indicator(df["Close"], window=fast)
+                                - ta.trend.ema_indicator(df["Close"], window=slow)
+                            )
+                            signal_line = macd_line.ewm(span=signal).mean()
 
-                        trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
+                            df["MACD"] = macd_line
+                            df["Signal"] = signal_line
 
-        progress_bar.progress(1.0)
+                            df["Crossover"] = (
+                                (df["MACD"].shift(1) < df["Signal"].shift(1))
+                                & (df["MACD"] > df["Signal"])
+                            )
 
-        combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
-        combo_remaining_text.text("⌛ Combinations remaining: 0")
+                            entries = df[df["Crossover"]].index
+                            total_trades = len(entries)
 
+                            if total_trades < min_trades:
+                                continue
+
+                            hits = 0
+                            trades_records = []
+
+                            for entry in entries:
+                                entry_date = df.loc[entry, "Date"]
+                                entry_price = df.loc[entry, "Close"]
+                                target_price = entry_price * (1 + target_pct / 100)
+
+                                last_idx = min(entry + max_days, len(df) - 1)
+                                subset = df.loc[entry + 1:last_idx]
+
+                                hit = False
+                                hit_rows = subset[subset["Close"] >= target_price]
+
+                                if not hit_rows.empty:
+                                    hit = True
+                                    hits += 1
+                                    exit_date = hit_rows.iloc[0]["Date"]
+                                    exit_price = hit_rows.iloc[0]["Close"]
+                                else:
+                                    if not subset.empty:
+                                        exit_date = subset.iloc[-1]["Date"]
+                                        exit_price = subset.iloc[-1]["Close"]
+                                    else:
+                                        exit_date = entry_date
+                                        exit_price = entry_price
+
+                                days_held = (exit_date - entry_date).days
+                                pct_return = ((exit_price - entry_price) / entry_price) * 100
+
+                                trades_records.append({
+                                    "Entry Date": entry_date,
+                                    "Entry Price": entry_price,
+                                    "Exit Date": exit_date,
+                                    "Exit Price": exit_price,
+                                    "Days Held": days_held,
+                                    "Pct Return": round(pct_return, 2),
+                                    "Target Hit": hit
+                                })
+
+                            accuracy = (hits / total_trades) * 100
+
+                            if accuracy >= min_accuracy:
+                                results.append({
+                                    "FastEMA": fast,
+                                    "SlowEMA": slow,
+                                    "SignalEMA": signal,
+                                    "Trades": total_trades,
+                                    "Hits": hits,
+                                    "Accuracy%": round(accuracy, 2)
+                                })
+
+                                trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
+
+                # End of nested loops
+                progress_bar.progress(1.0)
+                combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
+                combo_remaining_text.text("⌛ Combinations remaining: 0")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+
+        # Display results
         if results:
             results_df = (
                 pd.DataFrame(results)
@@ -268,7 +259,7 @@ if uploaded_file is not None:
                 k: v for k, v in trades_dict.items() if k in top10_keys
             }
 
-            # Only attempt to download if data exists
+            # Download if data exists
             if top10_trades_dict:
                 download_results(top10, top10_trades_dict)
             else:
