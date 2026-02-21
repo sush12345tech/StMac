@@ -1,7 +1,7 @@
 streamlit
 pandas
 numpy
-ta
+TA-Lib==0.4.28
 xlsxwriter
 openpyxl
 
