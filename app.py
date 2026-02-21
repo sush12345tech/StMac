@@ -101,97 +101,136 @@ def main():
         return
 
     # ==============================
-    # Optimization Loop
+    # Interactive Progress Container
+    # ==============================
+    progress_container = st.empty()
+    status_container = st.empty()
+    metrics_container = st.empty()
+    current_combo_container = st.empty()
+
+    # ==============================
+    # Optimization Loop with Live Updates
     # ==============================
     results = []
     trades_dict = {}
-
-    progress_bar = st.progress(0)
     combos_checked = 0
+    valid_combos = 0
 
-    for fast in fast_range:
-        for slow in slow_range:
-            if fast >= slow:
+    # Pre-calculate valid fast-slow pairs for better progress tracking
+    valid_fs_pairs = [(f, s) for f in fast_range for s in slow_range if f < s]
+    total_valid_combos = len(valid_fs_pairs) * len(signal_range)
+
+    for pair_idx, (fast, slow) in enumerate(valid_fs_pairs):
+        for signal in signal_range:
+            combos_checked += 1
+            
+            # Calculate precise progress
+            current_progress = (pair_idx * len(signal_range) + signal) / total_valid_combos
+            
+            # Update main progress bar
+            with progress_container.container():
+                progress_bar = st.progress(current_progress)
+                st.markdown(f"**Progress: {combos_checked:,}/{total_valid_combos:,} ({current_progress*100:.1f}%)**")
+            
+            # Live status
+            with status_container.container():
+                current_combo_container.markdown(
+                    f"**🔄 Current: Fast={fast}, Slow={slow}, Signal={signal}**"
+                )
+            
+            # Live metrics
+            with metrics_container.container():
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Checked", combos_checked, total_valid_combos)
+                with col2:
+                    st.metric("Valid Found", valid_combos, delta=None)
+                with col3:
+                    est_time = (total_valid_combos - combos_checked) * (combos_checked / 60)  # rough ETA in minutes
+                    st.metric("ETA", f"{est_time:.0f}min", delta=None)
+                with col4:
+                    st.metric("Best Accuracy", f"{max([r.get('Accuracy%', 0) for r in results] or [0]):.1f}%")
+
+            df = data.copy()
+
+            macd_line = (
+                ta.trend.ema_indicator(df["Close"], window=fast)
+                - ta.trend.ema_indicator(df["Close"], window=slow)
+            )
+            signal_line = macd_line.ewm(span=signal).mean()
+
+            df["MACD"] = macd_line
+            df["Signal"] = signal_line
+
+            df["Crossover"] = (
+                (df["MACD"].shift(1) < df["Signal"].shift(1)) &
+                (df["MACD"] > df["Signal"])
+            )
+
+            entries = df[df["Crossover"]].index
+            total_trades = len(entries)
+
+            if total_trades < min_trades:
                 continue
 
-            for signal in signal_range:
-                combos_checked += 1
-                progress_bar.progress(combos_checked / total_combinations)
+            hits = 0
+            trades_records = []
 
-                df = data.copy()
+            for entry in entries:
+                entry_date = df.loc[entry, "Date"]
+                entry_price = df.loc[entry, "Close"]
+                target_price = entry_price * (1 + target_pct / 100)
 
-                macd_line = (
-                    ta.trend.ema_indicator(df["Close"], window=fast)
-                    - ta.trend.ema_indicator(df["Close"], window=slow)
-                )
-                signal_line = macd_line.ewm(span=signal).mean()
+                last_idx = min(entry + max_days, len(df) - 1)
+                subset = df.loc[entry + 1:last_idx]
 
-                df["MACD"] = macd_line
-                df["Signal"] = signal_line
+                exit_price = entry_price
+                exit_date = entry_date
+                hit = False
 
-                df["Crossover"] = (
-                    (df["MACD"].shift(1) < df["Signal"].shift(1)) &
-                    (df["MACD"] > df["Signal"])
-                )
+                hit_rows = subset[subset["Close"] >= target_price]
 
-                entries = df[df["Crossover"]].index
-                total_trades = len(entries)
+                if not hit_rows.empty:
+                    hit = True
+                    hits += 1
+                    exit_date = hit_rows.iloc[0]["Date"]
+                    exit_price = hit_rows.iloc[0]["Close"]
+                elif not subset.empty:
+                    exit_date = subset.iloc[-1]["Date"]
+                    exit_price = subset.iloc[-1]["Close"]
 
-                if total_trades < min_trades:
-                    continue
+                pct_return = ((exit_price - entry_price) / entry_price) * 100
 
-                hits = 0
-                trades_records = []
+                trades_records.append({
+                    "Entry Date": entry_date,
+                    "Entry Price": entry_price,
+                    "Exit Date": exit_date,
+                    "Exit Price": exit_price,
+                    "Pct Return": round(pct_return, 2),
+                    "Target Hit": hit
+                })
 
-                for entry in entries:
-                    entry_date = df.loc[entry, "Date"]
-                    entry_price = df.loc[entry, "Close"]
-                    target_price = entry_price * (1 + target_pct / 100)
+            accuracy = (hits / total_trades) * 100
 
-                    last_idx = min(entry + max_days, len(df) - 1)
-                    subset = df.loc[entry + 1:last_idx]
+            if accuracy >= min_accuracy:
+                results.append({
+                    "FastEMA": fast,
+                    "SlowEMA": slow,
+                    "SignalEMA": signal,
+                    "Trades": total_trades,
+                    "Hits": hits,
+                    "Accuracy%": round(accuracy, 2)
+                })
+                trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
+                valid_combos += 1
 
-                    exit_price = entry_price
-                    exit_date = entry_date
-                    hit = False
+    # Final progress update
+    progress_container.empty()
+    status_container.empty()
+    metrics_container.empty()
+    current_combo_container.empty()
 
-                    hit_rows = subset[subset["Close"] >= target_price]
-
-                    if not hit_rows.empty:
-                        hit = True
-                        hits += 1
-                        exit_date = hit_rows.iloc[0]["Date"]
-                        exit_price = hit_rows.iloc[0]["Close"]
-                    elif not subset.empty:
-                        exit_date = subset.iloc[-1]["Date"]
-                        exit_price = subset.iloc[-1]["Close"]
-
-                    pct_return = ((exit_price - entry_price) / entry_price) * 100
-
-                    trades_records.append({
-                        "Entry Date": entry_date,
-                        "Entry Price": entry_price,
-                        "Exit Date": exit_date,
-                        "Exit Price": exit_price,
-                        "Pct Return": round(pct_return, 2),
-                        "Target Hit": hit
-                    })
-
-                accuracy = (hits / total_trades) * 100
-
-                if accuracy >= min_accuracy:
-                    results.append({
-                        "FastEMA": fast,
-                        "SlowEMA": slow,
-                        "SignalEMA": signal,
-                        "Trades": total_trades,
-                        "Hits": hits,
-                        "Accuracy%": round(accuracy, 2)
-                    })
-
-                    trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
-
-    progress_bar.progress(1.0)
+    st.success(f"✅ Optimization complete! Checked {combos_checked:,} combinations, found {len(results)} valid sets.")
 
     # ==============================
     # Results Display
@@ -203,12 +242,10 @@ def main():
             .reset_index(drop=True)
         )
 
-        st.success(f"✅ Found {len(results_df)} valid combinations")
+        st.write("### Top 10 Results")
+        st.dataframe(results_df.head(10))
 
         top10 = results_df.head(10)
-        st.write("### Top 10 Results")
-        st.dataframe(top10)
-
         top10_keys = [
             tuple(x)
             for x in top10[["FastEMA", "SlowEMA", "SignalEMA"]].values
