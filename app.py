@@ -33,19 +33,25 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
 
     file_ext = uploaded_file.name.split(".")[-1].lower()
+
     if file_ext == "csv":
         data = pd.read_csv(uploaded_file)
     else:
         data = pd.read_excel(uploaded_file, engine="openpyxl")
 
-    if not set(["Date", "Close"]).issubset(data.columns):
+    if not {"Date", "Close"}.issubset(data.columns):
         st.error("File must contain 'Date' and 'Close' columns.")
         st.stop()
 
     data["Date"] = pd.to_datetime(data["Date"])
     data = data.sort_values("Date").reset_index(drop=True)
 
+    st.write("### Data Preview")
+    st.dataframe(data.head())
+
     # -------- USER INPUTS --------
+    st.markdown("### Enter MACD Parameter Ranges")
+
     fast_min = st.number_input("Fast EMA Min", 2, 50, 12)
     fast_max = st.number_input("Fast EMA Max", 2, 50, 20)
 
@@ -65,26 +71,32 @@ if uploaded_file is not None:
     signal_range = range(signal_min, signal_max + 1)
 
     # -------- COMBINATION COUNT --------
-    total_combinations = 0
-    for fast in fast_range:
-        for slow in slow_range:
-            if fast < slow:
-                total_combinations += len(signal_range)
+    total_combinations = sum(
+        1
+        for fast in fast_range
+        for slow in slow_range
+        if fast < slow
+        for _ in signal_range
+    )
 
-    avg_time_per_combination = 0.08  # estimated seconds
+    avg_time_per_combination = 0.08
     estimated_seconds = total_combinations * avg_time_per_combination
 
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
 
     if estimated_seconds < 60:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
+        st.info(f"⏳ Estimated time: {estimated_seconds:.1f} seconds")
     elif estimated_seconds < 3600:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
+        st.info(f"⏳ Estimated time: {estimated_seconds/60:.1f} minutes")
     else:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
+        st.info(f"⏳ Estimated time: {estimated_seconds/3600:.2f} hours")
 
-    # -------- RUN OPTIMIZATION --------
+    # -------- RUN BUTTON --------
     if st.button("🚀 Run Optimization"):
+
+        if total_combinations == 0:
+            st.error("No valid parameter combinations (Fast must be < Slow).")
+            st.stop()
 
         start_time = time.time()
 
@@ -107,20 +119,20 @@ if uploaded_file is not None:
 
                     combos_checked += 1
 
-                    progress_bar.progress(
-                        min(combos_checked / total_combinations, 1.0)
-                    )
+                    progress_bar.progress(combos_checked / total_combinations)
                     combo_checked_text.text(
-                        f"✅ Combinations checked: {combos_checked:,}"
+                        f"✅ Checked: {combos_checked:,}"
                     )
                     combo_remaining_text.text(
-                        f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
+                        f"⌛ Remaining: {total_combinations - combos_checked:,}"
                     )
 
                     df = data.copy()
 
-                    macd_line = ta.trend.ema_indicator(df["Close"], window=fast) - \
-                                ta.trend.ema_indicator(df["Close"], window=slow)
+                    macd_line = (
+                        ta.trend.ema_indicator(df["Close"], window=fast)
+                        - ta.trend.ema_indicator(df["Close"], window=slow)
+                    )
 
                     signal_line = macd_line.ewm(span=signal).mean()
 
@@ -128,15 +140,13 @@ if uploaded_file is not None:
                     df["Signal"] = signal_line
 
                     df["Crossover"] = (
-                        (df["MACD"].shift(1) < df["Signal"].shift(1)) &
-                        (df["MACD"] > df["Signal"])
+                        (df["MACD"].shift(1) < df["Signal"].shift(1))
+                        & (df["MACD"] > df["Signal"])
                     )
 
                     entries = df[df["Crossover"]].index
 
-                    total_trades = len(entries)
-
-                    if total_trades < min_trades:
+                    if len(entries) < min_trades:
                         continue
 
                     hits = 0
@@ -149,7 +159,7 @@ if uploaded_file is not None:
                         target_price = entry_price * (1 + target_pct / 100)
 
                         last_idx = min(entry + max_days, len(df) - 1)
-                        subset = df.loc[entry + 1 : last_idx]
+                        subset = df.loc[entry + 1:last_idx]
 
                         exit_price = entry_price
                         exit_date = entry_date
@@ -179,14 +189,14 @@ if uploaded_file is not None:
                             "Target Hit": hit
                         })
 
-                    accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
+                    accuracy = (hits / len(entries)) * 100
 
                     if accuracy >= min_accuracy:
                         results.append({
                             "FastEMA": fast,
                             "SlowEMA": slow,
                             "SignalEMA": signal,
-                            "Trades": total_trades,
+                            "Trades": len(entries),
                             "Hits": hits,
                             "Accuracy%": round(accuracy, 2)
                         })
@@ -194,8 +204,6 @@ if uploaded_file is not None:
                         trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
 
         progress_bar.progress(1.0)
-        combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
-        combo_remaining_text.text("⌛ Combinations remaining: 0")
 
         end_time = time.time()
         total_time = end_time - start_time
@@ -214,7 +222,10 @@ if uploaded_file is not None:
 
             top10_trades_dict = {
                 k: v for k, v in trades_dict.items()
-                if k in [tuple(x) for x in top10[["FastEMA","SlowEMA","SignalEMA"]].values]
+                if k in [
+                    tuple(x)
+                    for x in top10[["FastEMA", "SlowEMA", "SignalEMA"]].values
+                ]
             }
 
             download_results(top10, top10_trades_dict)
