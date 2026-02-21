@@ -15,7 +15,6 @@ def download_results(df, trades_dict):
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
 
         for key, trades in trades_dict.items():
-            # Sheet name max length = 31
             sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
             trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
 
@@ -101,6 +100,11 @@ if uploaded_file is not None:
 
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
 
+    # ✅ NEW FIX 1 — Prevent division by zero
+    if total_combinations == 0:
+        st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
+        st.stop()
+
     if estimated_seconds < 60:
         st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
     elif estimated_seconds < 3600:
@@ -131,9 +135,10 @@ if uploaded_file is not None:
                 for signal in signal_range:
 
                     combos_checked += 1
-                    progress_bar.progress(
-                        min(combos_checked / total_combinations, 1.0)
-                    )
+
+                    # ✅ NEW FIX 2 — Force Python float
+                    progress_value = float(min(combos_checked / total_combinations, 1.0))
+                    progress_bar.progress(progress_value)
 
                     combo_checked_text.text(
                         f"✅ Combinations checked: {combos_checked:,}"
@@ -225,6 +230,7 @@ if uploaded_file is not None:
                         trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
 
         progress_bar.progress(1.0)
+
         combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
         combo_remaining_text.text("⌛ Combinations remaining: 0")
 
@@ -253,4 +259,4 @@ if uploaded_file is not None:
             download_results(top10, top10_trades_dict)
 
         else:
-            st.warning("No parameter combinations matched your criteria.") 
+            st.warning("No parameter combinations matched your criteria.")
