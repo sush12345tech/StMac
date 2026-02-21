@@ -3,16 +3,18 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import ta
+import time
+
 
 def download_results(df, trades_dict):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
-        
+
         for key, trades in trades_dict.items():
             sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
             trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
-    
+
     st.download_button(
         label="📊 Download Excel (Top10 + Trades)",
         data=output.getvalue(),
@@ -20,14 +22,16 @@ def download_results(df, trades_dict):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+
 st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
 
 uploaded_file = st.file_uploader(
-    "Upload CSV or Excel file (must include 'Date' and 'Close')", 
+    "Upload CSV or Excel file (must include 'Date' and 'Close')",
     type=["csv", "xls", "xlsx"]
 )
 
 if uploaded_file is not None:
+
     file_ext = uploaded_file.name.split(".")[-1].lower()
     if file_ext == "csv":
         data = pd.read_csv(uploaded_file)
@@ -41,6 +45,7 @@ if uploaded_file is not None:
     data["Date"] = pd.to_datetime(data["Date"])
     data = data.sort_values("Date").reset_index(drop=True)
 
+    # -------- USER INPUTS --------
     fast_min = st.number_input("Fast EMA Min", 2, 50, 12)
     fast_max = st.number_input("Fast EMA Max", 2, 50, 20)
 
@@ -59,16 +64,58 @@ if uploaded_file is not None:
     slow_range = range(slow_min, slow_max + 1)
     signal_range = range(signal_min, signal_max + 1)
 
+    # -------- COMBINATION COUNT --------
+    total_combinations = 0
+    for fast in fast_range:
+        for slow in slow_range:
+            if fast < slow:
+                total_combinations += len(signal_range)
+
+    avg_time_per_combination = 0.08  # estimated seconds
+    estimated_seconds = total_combinations * avg_time_per_combination
+
+    st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
+
+    if estimated_seconds < 60:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
+    elif estimated_seconds < 3600:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
+    else:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
+
+    # -------- RUN OPTIMIZATION --------
     if st.button("🚀 Run Optimization"):
+
+        start_time = time.time()
 
         results = []
         trades_dict = {}
 
+        progress_bar = st.progress(0)
+        combo_checked_text = st.empty()
+        combo_remaining_text = st.empty()
+
+        combos_checked = 0
+
         for fast in fast_range:
             for slow in slow_range:
+
                 if fast >= slow:
                     continue
+
                 for signal in signal_range:
+
+                    combos_checked += 1
+
+                    progress_bar.progress(
+                        min(combos_checked / total_combinations, 1.0)
+                    )
+                    combo_checked_text.text(
+                        f"✅ Combinations checked: {combos_checked:,}"
+                    )
+                    combo_remaining_text.text(
+                        f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
+                    )
 
                     df = data.copy()
 
@@ -87,26 +134,19 @@ if uploaded_file is not None:
 
                     entries = df[df["Crossover"]].index
 
-                    hits = 0
-                    above_zero_count = 0
-                    below_zero_count = 0
-                    above_zero_hits = 0
-                    below_zero_hits = 0
+                    total_trades = len(entries)
 
+                    if total_trades < min_trades:
+                        continue
+
+                    hits = 0
                     trades_records = []
 
-                    for i, entry in enumerate(entries):
+                    for entry in entries:
 
                         entry_date = df.loc[entry, "Date"]
                         entry_price = df.loc[entry, "Close"]
                         target_price = entry_price * (1 + target_pct / 100)
-
-                        if df.loc[entry, "MACD"] > 0 and df.loc[entry, "Signal"] > 0:
-                            crossover_position = "Above Zero"
-                            is_above = True
-                        else:
-                            crossover_position = "Below Zero"
-                            is_above = False
 
                         last_idx = min(entry + max_days, len(df) - 1)
                         subset = df.loc[entry + 1 : last_idx]
@@ -116,8 +156,10 @@ if uploaded_file is not None:
                         hit = False
 
                         hit_rows = subset[subset["Close"] >= target_price]
+
                         if not hit_rows.empty:
                             hit = True
+                            hits += 1
                             exit_date = hit_rows.iloc[0]["Date"]
                             exit_price = hit_rows.iloc[0]["Close"]
                         elif not subset.empty:
@@ -134,55 +176,12 @@ if uploaded_file is not None:
                             "Exit Price": exit_price,
                             "Days Held": days_held,
                             "Pct Return": round(pct_return, 2),
-                            "Target Hit": hit,
-                            "Crossover Position": crossover_position
+                            "Target Hit": hit
                         })
-
-                    # --------- REMOVE LAST TRADE IF TARGET HIT = FALSE ----------
-                    if trades_records:
-                        if trades_records[-1]["Target Hit"] is False:
-                            trades_records = trades_records[:-1]
-
-                    total_trades = len(trades_records)
-
-                    if total_trades < min_trades:
-                        continue
-
-                    for trade in trades_records:
-                        if trade["Crossover Position"] == "Above Zero":
-                            above_zero_count += 1
-                            if trade["Target Hit"]:
-                                above_zero_hits += 1
-                                hits += 1
-                        else:
-                            below_zero_count += 1
-                            if trade["Target Hit"]:
-                                below_zero_hits += 1
-                                hits += 1
 
                     accuracy = (hits / total_trades) * 100 if total_trades > 0 else 0
 
                     if accuracy >= min_accuracy:
-
-                        percent_above_cross = (above_zero_count / total_trades) * 100
-                        percent_above_hit_total = (above_zero_hits / total_trades) * 100
-                        percent_below_hit_total = (below_zero_hits / total_trades) * 100
-
-                        accuracy_above_zone = (above_zero_hits / above_zero_count) * 100 if above_zero_count > 0 else 0
-                        accuracy_below_zone = (below_zero_hits / below_zero_count) * 100 if below_zero_count > 0 else 0
-
-                        trades_df = pd.DataFrame(trades_records)
-
-                        summary_rows = pd.DataFrame([
-                            {"Crossover Position": f"% Crossed Above Zero = {round(percent_above_cross,2)}%"},
-                            {"Crossover Position": f"% Target Hit (Above Zero) / Total Trades = {round(percent_above_hit_total,2)}%"},
-                            {"Crossover Position": f"% Target Hit (Below Zero) / Total Trades = {round(percent_below_hit_total,2)}%"},
-                            {"Crossover Position": f"Accuracy of Above-Zero Trades = {round(accuracy_above_zone,2)}%"},
-                            {"Crossover Position": f"Accuracy of Below-Zero Trades = {round(accuracy_below_zone,2)}%"}
-                        ])
-
-                        trades_df = pd.concat([trades_df, summary_rows], ignore_index=True)
-
                         results.append({
                             "FastEMA": fast,
                             "SlowEMA": slow,
@@ -192,12 +191,23 @@ if uploaded_file is not None:
                             "Accuracy%": round(accuracy, 2)
                         })
 
-                        trades_dict[(fast, slow, signal)] = trades_df
+                        trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
+
+        progress_bar.progress(1.0)
+        combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
+        combo_remaining_text.text("⌛ Combinations remaining: 0")
+
+        end_time = time.time()
+        total_time = end_time - start_time
+
+        st.success(f"⏱ Total execution time: {total_time:.2f} seconds")
 
         if results:
             results_df = pd.DataFrame(results).sort_values(
                 "Accuracy%", ascending=False
             ).reset_index(drop=True)
+
+            st.success(f"✅ Found {len(results_df)} valid combinations")
 
             top10 = results_df.head(10)
             st.dataframe(top10)
