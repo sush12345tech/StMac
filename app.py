@@ -103,7 +103,7 @@ if uploaded_file is not None:
 
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
 
-    # ✅ FIX: Prevent division by zero
+    # FIX: Prevent division by zero
     if total_combinations == 0:
         st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
         st.stop()
@@ -123,9 +123,11 @@ if uploaded_file is not None:
         results = []
         trades_dict = {}
 
+        # Initialize progress bar
         progress_bar = st.progress(0.0)
         combo_checked_text = st.empty()
         combo_remaining_text = st.empty()
+
         combos_checked = 0
 
         # Wrap entire loop with spinner for better UX
@@ -143,10 +145,11 @@ if uploaded_file is not None:
                                 progress_value = float(combos_checked) / float(total_combinations)
                             else:
                                 progress_value = 0.0
-                            progress_value = min(max(progress_value, 0.0), 1.0)
-
-                            # Update progress bar and texts
+                            # Clamp to [0.0, 1.0]
+                            progress_value = max(0.0, min(progress_value, 1.0))
                             progress_bar.progress(progress_value)
+
+                            # Update text info
                             combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
                             combo_remaining_text.text(f"⌛ Combinations remaining: {total_combinations - combos_checked:,}")
 
