@@ -39,9 +39,6 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    # ==============================
-    # Read File
-    # ==============================
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
     if file_ext == "csv":
@@ -100,7 +97,6 @@ if uploaded_file is not None:
 
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
 
-    # ✅ NEW FIX 1 — Prevent division by zero
     if total_combinations == 0:
         st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
         st.stop()
@@ -135,14 +131,10 @@ if uploaded_file is not None:
                 for signal in signal_range:
 
                     combos_checked += 1
-
-                    # ✅ NEW FIX 2 — Force Python float
                     progress_value = float(min(combos_checked / total_combinations, 1.0))
                     progress_bar.progress(progress_value)
 
-                    combo_checked_text.text(
-                        f"✅ Combinations checked: {combos_checked:,}"
-                    )
+                    combo_checked_text.text(f"✅ Combinations checked: {combos_checked:,}")
                     combo_remaining_text.text(
                         f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
                     )
@@ -176,8 +168,14 @@ if uploaded_file is not None:
 
                         entry_date = df.loc[entry, "Date"]
                         entry_price = df.loc[entry, "Close"]
-                        target_price = entry_price * (1 + target_pct / 100)
 
+                        macd_value = df.loc[entry, "MACD"]
+                        signal_value = df.loc[entry, "Signal"]
+
+                        # TRUE only if crossover happened above zero
+                        macd_above_zero = (macd_value > 0) and (signal_value > 0)
+
+                        target_price = entry_price * (1 + target_pct / 100)
                         last_idx = min(entry + max_days, len(df) - 1)
                         subset = df.loc[entry + 1:last_idx]
 
@@ -201,9 +199,7 @@ if uploaded_file is not None:
                                 exit_price = entry_price
 
                         days_held = (exit_date - entry_date).days
-                        pct_return = (
-                            (exit_price - entry_price) / entry_price
-                        ) * 100
+                        pct_return = ((exit_price - entry_price) / entry_price) * 100
 
                         trades_records.append({
                             "Entry Date": entry_date,
@@ -212,25 +208,59 @@ if uploaded_file is not None:
                             "Exit Price": exit_price,
                             "Days Held": days_held,
                             "Pct Return": round(pct_return, 2),
-                            "Target Hit": hit
+                            "Target Hit": hit,
+                            "MACD Above Zero at Entry": macd_above_zero
                         })
 
-                    accuracy = (hits / total_trades) * 100
+                    trades_df = pd.DataFrame(trades_records)
 
-                    if accuracy >= min_accuracy:
+                    # Remove last trade if open and false
+                    filtered_df = trades_df.copy()
+                    if not filtered_df.empty:
+                        last_trade = filtered_df.iloc[-1]
+                        if last_trade["Target Hit"] is False:
+                            filtered_df = filtered_df.iloc[:-1]
+
+                    if filtered_df.empty:
+                        continue
+
+                    overall_accuracy = (
+                        filtered_df["Target Hit"].sum() / len(filtered_df)
+                    ) * 100
+
+                    above_zero_df = filtered_df[
+                        filtered_df["MACD Above Zero at Entry"] == True
+                    ]
+                    below_zero_df = filtered_df[
+                        filtered_df["MACD Above Zero at Entry"] == False
+                    ]
+
+                    above_zero_accuracy = (
+                        (above_zero_df["Target Hit"].sum() / len(above_zero_df)) * 100
+                        if len(above_zero_df) > 0 else 0
+                    )
+
+                    below_zero_accuracy = (
+                        (below_zero_df["Target Hit"].sum() / len(below_zero_df)) * 100
+                        if len(below_zero_df) > 0 else 0
+                    )
+
+                    if overall_accuracy >= min_accuracy:
+
                         results.append({
                             "FastEMA": fast,
                             "SlowEMA": slow,
                             "SignalEMA": signal,
                             "Trades": total_trades,
                             "Hits": hits,
-                            "Accuracy%": round(accuracy, 2)
+                            "Accuracy%": round(overall_accuracy, 2),
+                            "Above Zero Accuracy%": round(above_zero_accuracy, 2),
+                            "Below Zero Accuracy%": round(below_zero_accuracy, 2)
                         })
 
-                        trades_dict[(fast, slow, signal)] = pd.DataFrame(trades_records)
+                        trades_dict[(fast, slow, signal)] = trades_df
 
         progress_bar.progress(1.0)
-
         combo_checked_text.text(f"✅ Combinations checked: {total_combinations:,}")
         combo_remaining_text.text("⌛ Combinations remaining: 0")
 
