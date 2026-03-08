@@ -1,4 +1,4 @@
-# Intraday Hit
+# Intraday Hit (FAST VERSION)
 
 import streamlit as st
 import pandas as pd
@@ -10,12 +10,15 @@ import ta
 # Excel Download Function
 # ==============================
 def download_results(df, trades_dict):
+
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
 
         for key, trades in trades_dict.items():
+
             sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
             trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
 
@@ -98,23 +101,11 @@ if uploaded_file is not None:
             if fast < slow:
                 total_combinations += len(signal_range)
 
-    avg_time_per_combination = 0.1
-    estimated_seconds = total_combinations * avg_time_per_combination
-
     st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
 
     if total_combinations == 0:
         st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
         st.stop()
-
-    if estimated_seconds < 60:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
-
-    elif estimated_seconds < 3600:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
-
-    else:
-        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
 
     # ==============================
     # Run Optimization
@@ -126,7 +117,6 @@ if uploaded_file is not None:
         trades_dict = {}
 
         progress_bar = st.progress(0)
-
         checked_text = st.empty()
         remaining_text = st.empty()
 
@@ -143,7 +133,6 @@ if uploaded_file is not None:
 
                     combos_checked += 1
 
-                    # Update UI every 25 combinations
                     if combos_checked % 25 == 0:
 
                         progress_bar.progress(combos_checked / total_combinations)
@@ -191,9 +180,7 @@ if uploaded_file is not None:
                         macd_value = df.loc[entry, "MACD"]
                         signal_value = df.loc[entry, "Signal"]
 
-                        macd_above_zero = (
-                            (macd_value > 0) and (signal_value > 0)
-                        )
+                        macd_above_zero = (macd_value > 0) and (signal_value > 0)
 
                         target_price = entry_price * (1 + target_pct / 100)
 
@@ -206,29 +193,41 @@ if uploaded_file is not None:
                         hit = False
                         target_type = "No Hit"
 
-                        for i, row in subset.iterrows():
+                        # ==============================
+                        # FAST VECTOR METHOD
+                        # ==============================
 
-                            if row["Close"] >= target_price:
+                        close_hits = subset[subset["Close"] >= target_price]
+                        high_hits = subset[subset["High"] >= target_price]
 
-                                hit = True
-                                hits += 1
+                        first_close_idx = (
+                            close_hits.index[0] if not close_hits.empty else None
+                        )
 
-                                exit_date = row["Date"]
-                                exit_price = row["Close"]
+                        first_high_idx = (
+                            high_hits.index[0] if not high_hits.empty else None
+                        )
 
-                                target_type = "Close Hit"
-                                break
+                        if first_close_idx is not None and (
+                            first_high_idx is None
+                            or first_close_idx <= first_high_idx
+                        ):
 
-                            elif row["High"] >= target_price:
+                            hit = True
+                            hits += 1
 
-                                hit = True
-                                hits += 1
+                            exit_date = df.loc[first_close_idx, "Date"]
+                            exit_price = df.loc[first_close_idx, "Close"]
+                            target_type = "Close Hit"
 
-                                exit_date = row["Date"]
-                                exit_price = target_price
+                        elif first_high_idx is not None:
 
-                                target_type = "Intraday Hit"
-                                break
+                            hit = True
+                            hits += 1
+
+                            exit_date = df.loc[first_high_idx, "Date"]
+                            exit_price = target_price
+                            target_type = "Intraday Hit"
 
                         if exit_price is None:
 
