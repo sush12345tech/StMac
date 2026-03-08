@@ -5,7 +5,7 @@ import ta
 from itertools import product
 from io import BytesIO
 
-st.title("MACD Parameter Optimizer Top10 + Trades per Sheet)
+st.title("MACD Parameter Optimizer Top10 + Trades per Sheet")
 
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
 
