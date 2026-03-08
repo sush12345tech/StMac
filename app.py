@@ -1,30 +1,124 @@
+# Intraday Hit
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import ta
-from itertools import product
 from io import BytesIO
+import ta
 
-st.title("MACD Parameter Optimizer Top10 + Trades per Sheet")
+# ==============================
+# Excel Download Function
+# ==============================
+def download_results(df, trades_dict):
+    output = BytesIO()
 
-uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Top10 Results")
 
-if uploaded_file:
+        for key, trades in trades_dict.items():
+            sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
+            trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
 
-    data = pd.read_excel(uploaded_file)
+    st.download_button(
+        label="📊 Download Excel (Top10 + Trades)",
+        data=output.getvalue(),
+        file_name="macd_results_with_trades.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ==============================
+# App Title
+# ==============================
+st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
+st.markdown("Upload historical price data")
+
+uploaded_file = st.file_uploader(
+    "Upload CSV or Excel file (must include 'Date', 'Close', 'High')",
+    type=["csv", "xls", "xlsx"],
+)
+
+if uploaded_file is not None:
+
+    file_ext = uploaded_file.name.split(".")[-1].lower()
+
+    if file_ext == "csv":
+        data = pd.read_csv(uploaded_file)
+
+    elif file_ext in ["xls", "xlsx"]:
+        data = pd.read_excel(uploaded_file, engine="openpyxl")
+
+    else:
+        st.error("Unsupported file format")
+        st.stop()
+
+    if not {"Date", "Close", "High"}.issubset(data.columns):
+        st.error("File must contain 'Date', 'Close', and 'High' columns.")
+        st.stop()
+
+    data["Date"] = pd.to_datetime(data["Date"])
+    data = data.sort_values("Date").reset_index(drop=True)
 
     st.write("### Data Preview")
     st.dataframe(data.head())
 
-    stock_name = st.text_input("Enter Stock Name", "SampleStock")
+    # ==============================
+    # Inputs
+    # ==============================
 
-    fast_range = range(5, 21)
-    slow_range = range(20, 61)
-    signal_range = range(5, 16)
+    st.markdown("### Enter MACD Parameter Ranges and Optimization Criteria")
 
-    total_combinations = len(fast_range) * len(slow_range) * len(signal_range)
+    fast_min = st.number_input("Fast EMA Min", 2, 50, 12)
+    fast_max = st.number_input("Fast EMA Max", 2, 50, 20)
 
-    st.write(f"⚙️ Approximate combinations to check: **{total_combinations:,}**")
+    slow_min = st.number_input("Slow EMA Min", 10, 100, 26)
+    slow_max = st.number_input("Slow EMA Max", 10, 100, 40)
+
+    signal_min = st.number_input("Signal EMA Min", 2, 30, 9)
+    signal_max = st.number_input("Signal EMA Max", 2, 30, 15)
+
+    target_pct = st.number_input("Target % (from entry)", 1.0, 100.0, 5.0)
+    max_days = st.number_input("Max Trading Days to Hit Target", 1, len(data), 10)
+
+    min_trades = st.number_input("Minimum Trades Required", 1, 100, 5)
+    min_accuracy = st.number_input("Minimum Accuracy %", 1, 100, 40)
+
+    fast_range = range(fast_min, fast_max + 1)
+    slow_range = range(slow_min, slow_max + 1)
+    signal_range = range(signal_min, signal_max + 1)
+
+    # ==============================
+    # Combination Estimation
+    # ==============================
+
+    total_combinations = 0
+
+    for fast in fast_range:
+        for slow in slow_range:
+            if fast < slow:
+                total_combinations += len(signal_range)
+
+    avg_time_per_combination = 0.1
+    estimated_seconds = total_combinations * avg_time_per_combination
+
+    st.info(f"⚙️ Approximate combinations to check: {total_combinations:,}")
+
+    if total_combinations == 0:
+        st.error("Invalid parameter ranges: Fast EMA must be less than Slow EMA.")
+        st.stop()
+
+    if estimated_seconds < 60:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds:.1f} seconds")
+
+    elif estimated_seconds < 3600:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/60:.1f} minutes")
+
+    else:
+        st.info(f"⏳ Estimated analysis time: {estimated_seconds/3600:.2f} hours")
+
+    # ==============================
+    # Run Optimization
+    # ==============================
 
     if st.button("🚀 Run Optimization"):
 
@@ -33,8 +127,8 @@ if uploaded_file:
 
         progress_bar = st.progress(0)
 
-        combo_checked_text = st.empty()
-        combo_remaining_text = st.empty()
+        checked_text = st.empty()
+        remaining_text = st.empty()
 
         combos_checked = 0
 
@@ -49,19 +143,17 @@ if uploaded_file:
 
                     combos_checked += 1
 
-                    # Update UI every 25 iterations (prevents UI freezing)
+                    # Update UI every 25 combinations
                     if combos_checked % 25 == 0:
 
-                        progress_value = min(combos_checked / total_combinations, 1.0)
+                        progress_bar.progress(combos_checked / total_combinations)
 
-                        progress_bar.progress(progress_value)
-
-                        combo_checked_text.text(
+                        checked_text.text(
                             f"✅ Combinations checked: {combos_checked:,}"
                         )
 
-                        combo_remaining_text.text(
-                            f"⌛ Combinations remaining: {total_combinations - combos_checked:,}"
+                        remaining_text.text(
+                            f"⌛ Remaining combinations: {total_combinations - combos_checked:,}"
                         )
 
                     df = data.copy()
@@ -71,99 +163,185 @@ if uploaded_file:
                         - ta.trend.ema_indicator(df["Close"], window=slow)
                     )
 
-                    signal_line = ta.trend.ema_indicator(macd_line, window=signal)
+                    signal_line = macd_line.ewm(span=signal).mean()
 
                     df["MACD"] = macd_line
                     df["Signal"] = signal_line
 
-                    df["Cross"] = (df["MACD"] > df["Signal"]) & (
-                        df["MACD"].shift(1) <= df["Signal"].shift(1)
+                    df["Crossover"] = (
+                        (df["MACD"].shift(1) < df["Signal"].shift(1))
+                        & (df["MACD"] > df["Signal"])
                     )
 
-                    trades = df[df["Cross"]]
+                    entries = df[df["Crossover"]].index
 
-                    total_trades = len(trades)
+                    total_trades = len(entries)
+
+                    if total_trades < min_trades:
+                        continue
 
                     hits = 0
-                    trade_records = []
+                    trades_records = []
 
-                    for idx in trades.index:
+                    for entry in entries:
 
-                        entry_price = df.loc[idx, "Close"]
-                        entry_date = df.loc[idx, "Date"]
+                        entry_date = df.loc[entry, "Date"]
+                        entry_price = df.loc[entry, "Close"]
 
-                        future = df.loc[idx+1:idx+5]
+                        macd_value = df.loc[entry, "MACD"]
+                        signal_value = df.loc[entry, "Signal"]
 
-                        if future.empty:
-                            continue
+                        macd_above_zero = (
+                            (macd_value > 0) and (signal_value > 0)
+                        )
 
-                        exit_price = future["Close"].iloc[-1]
-                        exit_date = future["Date"].iloc[-1]
+                        target_price = entry_price * (1 + target_pct / 100)
 
-                        pct_return = ((exit_price - entry_price) / entry_price) * 100
+                        last_idx = min(entry + max_days, len(df) - 1)
 
-                        hit = pct_return > 0
+                        subset = df.loc[entry + 1 : last_idx]
 
-                        if hit:
-                            hits += 1
+                        exit_price = None
+                        exit_date = None
+                        hit = False
+                        target_type = "No Hit"
 
-                        trade_records.append({
-                            "Stock": stock_name,
-                            "Entry Date": entry_date,
-                            "Entry Price": entry_price,
-                            "Exit Date": exit_date,
-                            "Exit Price": exit_price,
-                            "Pct Return": round(pct_return,2),
-                            "Target Hit": hit
-                        })
+                        for i, row in subset.iterrows():
 
-                    if total_trades > 0:
+                            if row["Close"] >= target_price:
 
-                        accuracy = (hits / total_trades) * 100
+                                hit = True
+                                hits += 1
 
-                        results.append({
-                            "Stock": stock_name,
-                            "FastEMA": fast,
-                            "SlowEMA": slow,
-                            "SignalEMA": signal,
-                            "Trades": total_trades,
-                            "Hits": hits,
-                            "Accuracy%": round(accuracy,2)
-                        })
+                                exit_date = row["Date"]
+                                exit_price = row["Close"]
 
-                        trades_dict[f"{fast}_{slow}_{signal}"] = pd.DataFrame(trade_records)
+                                target_type = "Close Hit"
+                                break
 
-        # Final progress update
+                            elif row["High"] >= target_price:
+
+                                hit = True
+                                hits += 1
+
+                                exit_date = row["Date"]
+                                exit_price = target_price
+
+                                target_type = "Intraday Hit"
+                                break
+
+                        if exit_price is None:
+
+                            if not subset.empty:
+
+                                exit_date = subset.iloc[-1]["Date"]
+                                exit_price = subset.iloc[-1]["Close"]
+
+                            else:
+
+                                exit_date = entry_date
+                                exit_price = entry_price
+
+                        days_held = (exit_date - entry_date).days
+
+                        pct_return = (
+                            (exit_price - entry_price) / entry_price
+                        ) * 100
+
+                        trades_records.append(
+                            {
+                                "Entry Date": entry_date,
+                                "Entry Price": entry_price,
+                                "Exit Date": exit_date,
+                                "Exit Price": exit_price,
+                                "Days Held": days_held,
+                                "Pct Return": round(pct_return, 2),
+                                "Target Hit": hit,
+                                "Target Type": target_type,
+                                "MACD Above Zero at Entry": macd_above_zero,
+                            }
+                        )
+
+                    trades_df = pd.DataFrame(trades_records)
+
+                    if trades_df.empty:
+                        continue
+
+                    overall_accuracy = (
+                        trades_df["Target Hit"].sum() / len(trades_df)
+                    ) * 100
+
+                    above_zero_df = trades_df[
+                        trades_df["MACD Above Zero at Entry"] == True
+                    ]
+
+                    below_zero_df = trades_df[
+                        trades_df["MACD Above Zero at Entry"] == False
+                    ]
+
+                    above_zero_accuracy = (
+                        (above_zero_df["Target Hit"].sum() / len(above_zero_df))
+                        * 100
+                        if len(above_zero_df) > 0
+                        else 0
+                    )
+
+                    below_zero_accuracy = (
+                        (below_zero_df["Target Hit"].sum() / len(below_zero_df))
+                        * 100
+                        if len(below_zero_df) > 0
+                        else 0
+                    )
+
+                    if overall_accuracy >= min_accuracy:
+
+                        results.append(
+                            {
+                                "FastEMA": fast,
+                                "SlowEMA": slow,
+                                "SignalEMA": signal,
+                                "Trades": total_trades,
+                                "Hits": hits,
+                                "Accuracy%": round(overall_accuracy, 2),
+                                "Above Zero Accuracy%": round(
+                                    above_zero_accuracy, 2
+                                ),
+                                "Below Zero Accuracy%": round(
+                                    below_zero_accuracy, 2
+                                ),
+                            }
+                        )
+
+                        trades_dict[(fast, slow, signal)] = trades_df
+
         progress_bar.progress(1.0)
 
-        combo_checked_text.text(
-            f"✅ Combinations checked: {total_combinations:,}"
-        )
+        if results:
 
-        combo_remaining_text.text(
-            "⌛ Combinations remaining: 0"
-        )
+            results_df = (
+                pd.DataFrame(results)
+                .sort_values("Accuracy%", ascending=False)
+                .reset_index(drop=True)
+            )
 
-        results_df = pd.DataFrame(results)
+            st.success(f"✅ Found {len(results_df)} valid combinations")
 
-        top10 = results_df.sort_values("Accuracy%", ascending=False).head(10)
+            st.write("### Top 10 Results")
 
-        st.write("### Top 10 Results")
-        st.dataframe(top10)
+            top10 = results_df.head(10)
 
-        output = BytesIO()
+            st.dataframe(top10)
 
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            top10_keys = [
+                tuple(x)
+                for x in top10[["FastEMA", "SlowEMA", "SignalEMA"]].values
+            ]
 
-            top10.to_excel(writer, sheet_name="Top10 Results", index=False)
+            top10_trades_dict = {
+                k: v for k, v in trades_dict.items() if k in top10_keys
+            }
 
-            for key, df_trades in trades_dict.items():
+            download_results(top10, top10_trades_dict)
 
-                df_trades.to_excel(writer, sheet_name=key[:31], index=False)
-
-        st.download_button(
-            label="Download Excel Results",
-            data=output.getvalue(),
-            file_name=f"{stock_name}_MACD_Optimization.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        else:
+            st.warning("No parameter combinations matched your criteria.")
