@@ -30,7 +30,7 @@ def download_results(df, trades_dict):
 # ==============================
 # App Title
 # ==============================
-st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
+st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheets)")
 st.markdown("Upload historical price data")
 
 uploaded_file = st.file_uploader(
