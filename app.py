@@ -1,5 +1,3 @@
-# Intraday Hit (FAST VERSION)
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,7 +16,6 @@ def download_results(df, trades_dict):
         df.to_excel(writer, index=False, sheet_name="Top10 Results")
 
         for key, trades in trades_dict.items():
-
             sheet_name = f"{key[0]}_{key[1]}_{key[2]}"
             trades.to_excel(writer, index=False, sheet_name=sheet_name[:31])
 
@@ -33,7 +30,7 @@ def download_results(df, trades_dict):
 # ==============================
 # App Title
 # ==============================
-st.title("📈 MACD Parameter Optimizer (Top10 + Trades per Sheet)")
+st.title("📈 MACD Parameter Optimizer (FAST VERSION)")
 st.markdown("Upload historical price data")
 
 uploaded_file = st.file_uploader(
@@ -108,6 +105,18 @@ if uploaded_file is not None:
         st.stop()
 
     # ==============================
+    # PRECOMPUTE EMA CACHE (KEY SPEED BOOST)
+    # ==============================
+
+    ema_cache = {}
+    for period in set(list(fast_range) + list(slow_range)):
+        ema_cache[period] = ta.trend.ema_indicator(data["Close"], window=period).values
+
+    close_arr = data["Close"].values
+    high_arr = data["High"].values
+    date_arr = data["Date"].values
+
+    # ==============================
     # Run Optimization
     # ==============================
 
@@ -124,45 +133,35 @@ if uploaded_file is not None:
 
         for fast in fast_range:
 
+            fast_ema = ema_cache[fast]
+
             for slow in slow_range:
 
                 if fast >= slow:
                     continue
 
+                slow_ema = ema_cache[slow]
+
+                macd_line = fast_ema - slow_ema
+
                 for signal in signal_range:
 
                     combos_checked += 1
 
-                    if combos_checked % 25 == 0:
-
+                    if combos_checked % 50 == 0:
                         progress_bar.progress(combos_checked / total_combinations)
+                        checked_text.text(f"✅ Checked: {combos_checked:,}")
+                        remaining_text.text(f"⌛ Remaining: {total_combinations - combos_checked:,}")
 
-                        checked_text.text(
-                            f"✅ Combinations checked: {combos_checked:,}"
-                        )
+                    signal_line = pd.Series(macd_line).ewm(span=signal).mean().values
 
-                        remaining_text.text(
-                            f"⌛ Remaining combinations: {total_combinations - combos_checked:,}"
-                        )
-
-                    df = data.copy()
-
-                    macd_line = (
-                        ta.trend.ema_indicator(df["Close"], window=fast)
-                        - ta.trend.ema_indicator(df["Close"], window=slow)
+                    crossover = (
+                        (np.roll(macd_line, 1) < np.roll(signal_line, 1)) &
+                        (macd_line > signal_line)
                     )
+                    crossover[0] = False
 
-                    signal_line = macd_line.ewm(span=signal).mean()
-
-                    df["MACD"] = macd_line
-                    df["Signal"] = signal_line
-
-                    df["Crossover"] = (
-                        (df["MACD"].shift(1) < df["Signal"].shift(1))
-                        & (df["MACD"] > df["Signal"])
-                    )
-
-                    entries = df[df["Crossover"]].index
+                    entries = np.where(crossover)[0]
 
                     total_trades = len(entries)
 
@@ -174,142 +173,105 @@ if uploaded_file is not None:
 
                     for entry in entries:
 
-                        entry_date = df.loc[entry, "Date"]
-                        entry_price = df.loc[entry, "Close"]
+                        entry_price = close_arr[entry]
+                        entry_date = date_arr[entry]
 
-                        macd_value = df.loc[entry, "MACD"]
-                        signal_value = df.loc[entry, "Signal"]
+                        macd_value = macd_line[entry]
+                        signal_value = signal_line[entry]
 
                         macd_above_zero = (macd_value > 0) and (signal_value > 0)
 
                         target_price = entry_price * (1 + target_pct / 100)
 
-                        last_idx = min(entry + max_days, len(df) - 1)
+                        last_idx = min(entry + max_days, len(close_arr) - 1)
 
-                        subset = df.loc[entry + 1 : last_idx]
+                        future_close = close_arr[entry + 1 : last_idx + 1]
+                        future_high = high_arr[entry + 1 : last_idx + 1]
+                        future_dates = date_arr[entry + 1 : last_idx + 1]
 
+                        hit = False
                         exit_price = None
                         exit_date = None
-                        hit = False
                         target_type = "No Hit"
 
-                        # ==============================
-                        # FAST VECTOR METHOD
-                        # ==============================
+                        close_hit_idx = np.where(future_close >= target_price)[0]
+                        high_hit_idx = np.where(future_high >= target_price)[0]
 
-                        close_hits = subset[subset["Close"] >= target_price]
-                        high_hits = subset[subset["High"] >= target_price]
+                        first_close = close_hit_idx[0] if len(close_hit_idx) > 0 else None
+                        first_high = high_hit_idx[0] if len(high_hit_idx) > 0 else None
 
-                        first_close_idx = (
-                            close_hits.index[0] if not close_hits.empty else None
-                        )
-
-                        first_high_idx = (
-                            high_hits.index[0] if not high_hits.empty else None
-                        )
-
-                        if first_close_idx is not None and (
-                            first_high_idx is None
-                            or first_close_idx <= first_high_idx
+                        if first_close is not None and (
+                            first_high is None or first_close <= first_high
                         ):
-
                             hit = True
                             hits += 1
-
-                            exit_date = df.loc[first_close_idx, "Date"]
-                            exit_price = df.loc[first_close_idx, "Close"]
+                            exit_price = future_close[first_close]
+                            exit_date = future_dates[first_close]
                             target_type = "Close Hit"
 
-                        elif first_high_idx is not None:
-
+                        elif first_high is not None:
                             hit = True
                             hits += 1
-
-                            exit_date = df.loc[first_high_idx, "Date"]
                             exit_price = target_price
+                            exit_date = future_dates[first_high]
                             target_type = "Intraday Hit"
 
-                        if exit_price is None:
-
-                            if not subset.empty:
-
-                                exit_date = subset.iloc[-1]["Date"]
-                                exit_price = subset.iloc[-1]["Close"]
-
+                        else:
+                            if len(future_close) > 0:
+                                exit_price = future_close[-1]
+                                exit_date = future_dates[-1]
                             else:
-
-                                exit_date = entry_date
                                 exit_price = entry_price
+                                exit_date = entry_date
 
-                        days_held = (exit_date - entry_date).days
+                        days_held = (exit_date - entry_date).astype('timedelta64[D]').item().days
 
-                        pct_return = (
-                            (exit_price - entry_price) / entry_price
-                        ) * 100
+                        pct_return = ((exit_price - entry_price) / entry_price) * 100
 
-                        trades_records.append(
-                            {
-                                "Entry Date": entry_date,
-                                "Entry Price": entry_price,
-                                "Exit Date": exit_date,
-                                "Exit Price": exit_price,
-                                "Days Held": days_held,
-                                "Pct Return": round(pct_return, 2),
-                                "Target Hit": hit,
-                                "Target Type": target_type,
-                                "MACD Above Zero at Entry": macd_above_zero,
-                            }
-                        )
+                        trades_records.append({
+                            "Entry Date": entry_date,
+                            "Entry Price": entry_price,
+                            "Exit Date": exit_date,
+                            "Exit Price": exit_price,
+                            "Days Held": days_held,
+                            "Pct Return": round(pct_return, 2),
+                            "Target Hit": hit,
+                            "Target Type": target_type,
+                            "MACD Above Zero at Entry": macd_above_zero,
+                        })
 
                     trades_df = pd.DataFrame(trades_records)
 
                     if trades_df.empty:
                         continue
 
-                    overall_accuracy = (
-                        trades_df["Target Hit"].sum() / len(trades_df)
-                    ) * 100
+                    overall_accuracy = (trades_df["Target Hit"].sum() / len(trades_df)) * 100
 
-                    above_zero_df = trades_df[
-                        trades_df["MACD Above Zero at Entry"] == True
-                    ]
-
-                    below_zero_df = trades_df[
-                        trades_df["MACD Above Zero at Entry"] == False
-                    ]
+                    above_zero_df = trades_df[trades_df["MACD Above Zero at Entry"]]
+                    below_zero_df = trades_df[~trades_df["MACD Above Zero at Entry"]]
 
                     above_zero_accuracy = (
-                        (above_zero_df["Target Hit"].sum() / len(above_zero_df))
-                        * 100
-                        if len(above_zero_df) > 0
-                        else 0
+                        (above_zero_df["Target Hit"].sum() / len(above_zero_df)) * 100
+                        if len(above_zero_df) > 0 else 0
                     )
 
                     below_zero_accuracy = (
-                        (below_zero_df["Target Hit"].sum() / len(below_zero_df))
-                        * 100
-                        if len(below_zero_df) > 0
-                        else 0
+                        (below_zero_df["Target Hit"].sum() / len(below_zero_df)) * 100
+                        if len(below_zero_df) > 0 else 0
                     )
 
                     if overall_accuracy >= min_accuracy:
 
-                        results.append(
-                            {
-                                "FastEMA": fast,
-                                "SlowEMA": slow,
-                                "SignalEMA": signal,
-                                "Trades": total_trades,
-                                "Hits": hits,
-                                "Accuracy%": round(overall_accuracy, 2),
-                                "Above Zero Accuracy%": round(
-                                    above_zero_accuracy, 2
-                                ),
-                                "Below Zero Accuracy%": round(
-                                    below_zero_accuracy, 2
-                                ),
-                            }
-                        )
+                        results.append({
+                            "FastEMA": fast,
+                            "SlowEMA": slow,
+                            "SignalEMA": signal,
+                            "Trades": total_trades,
+                            "Hits": hits,
+                            "Accuracy%": round(overall_accuracy, 2),
+                            "Above Zero Accuracy%": round(above_zero_accuracy, 2),
+                            "Below Zero Accuracy%": round(below_zero_accuracy, 2),
+                        })
 
                         trades_dict[(fast, slow, signal)] = trades_df
 
@@ -328,7 +290,6 @@ if uploaded_file is not None:
             st.write("### Top 10 Results")
 
             top10 = results_df.head(10)
-
             st.dataframe(top10)
 
             top10_keys = [
